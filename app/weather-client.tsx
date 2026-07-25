@@ -1,0 +1,1153 @@
+"use client";
+
+import {
+  Cloud,
+  CloudFog,
+  CloudLightning,
+  CloudRain,
+  CloudSun,
+  Droplets,
+  LocateFixed,
+  MapPin,
+  Moon,
+  RefreshCw,
+  Search,
+  Snowflake,
+  Sun,
+  Wind,
+  X,
+} from "lucide-react";
+import Link from "next/link";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from "react";
+
+const DISPLAY_HOURS = Array.from({ length: 18 }, (_, index) => index + 5);
+const SEATTLE = { latitude: 47.6062, longitude: -122.3321 };
+const LOCATION_QUERY_KEY = "location";
+const SEARCH_DEBOUNCE_MS = 350;
+const THEME_STORAGE_KEY = "wx-theme";
+const THEME_CHANGE_EVENT = "wx-theme-change";
+
+type LoadPhase = "locating" | "loading" | "ready" | "error";
+type Theme = "light" | "dark";
+
+type PlaceResult = {
+  admin1?: string;
+  admin2?: string;
+  country_code: string;
+  id: number;
+  latitude: number;
+  longitude: number;
+  name: string;
+};
+
+type GeocodingResponse = {
+  results?: PlaceResult[];
+};
+
+function getStoredTheme(): Theme {
+  if (typeof window === "undefined") return "dark";
+  return window.localStorage.getItem(THEME_STORAGE_KEY) === "light"
+    ? "light"
+    : "dark";
+}
+
+function subscribeToTheme(onStoreChange: () => void) {
+  const handleStorage = (event: StorageEvent) => {
+    if (event.key === THEME_STORAGE_KEY) onStoreChange();
+  };
+
+  window.addEventListener("storage", handleStorage);
+  window.addEventListener(THEME_CHANGE_EVENT, onStoreChange);
+
+  return () => {
+    window.removeEventListener("storage", handleStorage);
+    window.removeEventListener(THEME_CHANGE_EVENT, onStoreChange);
+  };
+}
+
+function saveTheme(theme: Theme) {
+  window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+  document.documentElement.dataset.theme = theme;
+  window.dispatchEvent(new Event(THEME_CHANGE_EVENT));
+}
+
+function readSharedCoordinates() {
+  if (typeof window === "undefined") return null;
+
+  const value = new URLSearchParams(window.location.search).get(
+    LOCATION_QUERY_KEY,
+  );
+
+  if (!value) return null;
+
+  const parts = value.split(",");
+  if (parts.length !== 2) return null;
+
+  const latitude = Number(parts[0]);
+  const longitude = Number(parts[1]);
+  const isValid =
+    Number.isFinite(latitude) &&
+    Number.isFinite(longitude) &&
+    latitude >= -90 &&
+    latitude <= 90 &&
+    longitude >= -180 &&
+    longitude <= 180;
+
+  return isValid ? { latitude, longitude } : null;
+}
+
+function updateSharedCoordinates(latitude: number, longitude: number) {
+  const url = new URL(window.location.href);
+  url.searchParams.set(
+    LOCATION_QUERY_KEY,
+    `${latitude.toFixed(4)},${longitude.toFixed(4)}`,
+  );
+  window.history.replaceState(window.history.state, "", url);
+}
+
+type NoaaValue = {
+  unitCode: string;
+  value: number | null;
+};
+
+type HourlyPeriod = {
+  endTime: string;
+  icon: string;
+  isDaytime: boolean;
+  name: string;
+  number: number;
+  probabilityOfPrecipitation?: NoaaValue;
+  relativeHumidity?: NoaaValue;
+  shortForecast: string;
+  startTime: string;
+  temperature: number;
+  temperatureUnit: string;
+  windDirection: string;
+  windSpeed: string;
+};
+
+type CurrentReading = {
+  description: string;
+  humidity: number | null;
+  temperatureF: number | null;
+  timestamp: string | null;
+};
+
+type WeatherData = {
+  city: string;
+  coordinates: { latitude: number; longitude: number };
+  current: CurrentReading;
+  daily: HourlyPeriod[];
+  hourly: HourlyPeriod[];
+  observations: StationObservation[];
+  state: string;
+  stationId: string | null;
+  timeZone: string;
+};
+
+type PointResponse = {
+  properties: {
+    forecast: string;
+    forecastHourly: string;
+    observationStations: string;
+    relativeLocation?: {
+      properties?: {
+        city?: string;
+        state?: string;
+      };
+    };
+    timeZone: string;
+  };
+};
+
+type ObservationStationsResponse = {
+  features: Array<{ id: string }>;
+};
+
+type StationObservation = {
+  icon: string | null;
+  precipitationLastHour: NoaaValue | null;
+  rawMessage: string | null;
+  relativeHumidity: NoaaValue;
+  temperature: NoaaValue;
+  textDescription: string;
+  timestamp: string;
+};
+
+type StationObservationsResponse = {
+  features: Array<{
+    properties: StationObservation;
+  }>;
+};
+
+type ForecastResponse = {
+  properties: {
+    periods: HourlyPeriod[];
+  };
+};
+
+const noaaHeaders = {
+  Accept: "application/geo+json",
+};
+
+async function fetchNoaaJson<T>(url: string): Promise<T> {
+  const response = await fetch(url, { headers: noaaHeaders });
+
+  if (!response.ok) {
+    throw new Error(`NOAA request failed (${response.status})`);
+  }
+
+  return response.json() as Promise<T>;
+}
+
+function celsiusToFahrenheit(value: number | null) {
+  return value === null ? null : (value * 9) / 5 + 32;
+}
+
+function metersToInches(value: number | null) {
+  return value === null ? null : value * 39.3701;
+}
+
+function observationPrecipitationInches(observation: StationObservation) {
+  const structuredValue = observation.precipitationLastHour?.value ?? null;
+  const rawMessage = observation.rawMessage ?? "";
+
+  if (structuredValue !== null) {
+    return metersToInches(structuredValue);
+  }
+
+  const metarAmount = rawMessage.match(/\bP(\d{4})\b/);
+
+  if (metarAmount) {
+    return Number(metarAmount[1]) / 100;
+  }
+
+  // Routine hourly METARs omit the P-group when no measurable rain fell.
+  return rawMessage ? 0 : null;
+}
+
+function observationPriority(observation: StationObservation) {
+  const minute = new Date(observation.timestamp).getUTCMinutes();
+  const isRoutineHourlyReport = minute >= 51 && minute <= 59;
+  const rawMessage = observation.rawMessage ?? "";
+  const hasMetar = Boolean(rawMessage);
+  const hasRainValue =
+    observation.precipitationLastHour?.value != null ||
+    /\bP\d{4}\b/.test(rawMessage);
+
+  return (
+    (isRoutineHourlyReport ? 4 : 0) +
+    (hasMetar ? 2 : 0) +
+    (hasRainValue ? 1 : 0)
+  );
+}
+
+async function getStationObservations(
+  stationsUrl: string,
+): Promise<{
+  observations: StationObservation[];
+  stationId: string | null;
+}> {
+  try {
+    const stations =
+      await fetchNoaaJson<ObservationStationsResponse>(stationsUrl);
+    const stationUrl = stations.features[0]?.id;
+
+    if (!stationUrl) return { observations: [], stationId: null };
+
+    const end = new Date();
+    const start = new Date(end.getTime() - 30 * 60 * 60 * 1000);
+    const url = new URL(`${stationUrl}/observations`);
+    url.searchParams.set("start", start.toISOString());
+    url.searchParams.set("end", end.toISOString());
+    url.searchParams.set("limit", "500");
+
+    const response = await fetchNoaaJson<StationObservationsResponse>(
+      url.toString(),
+    );
+    return {
+      observations: response.features.map(({ properties }) => properties),
+      stationId: stationUrl.split("/").pop() ?? null,
+    };
+  } catch {
+    return { observations: [], stationId: null };
+  }
+}
+
+async function getNoaaWeather(
+  latitude: number,
+  longitude: number,
+): Promise<WeatherData> {
+  const point = await fetchNoaaJson<PointResponse>(
+    `https://api.weather.gov/points/${latitude.toFixed(4)},${longitude.toFixed(4)}`,
+  );
+
+  const [hourlyForecast, dailyForecast, stationData] = await Promise.all([
+    fetchNoaaJson<ForecastResponse>(point.properties.forecastHourly),
+    fetchNoaaJson<ForecastResponse>(point.properties.forecast),
+    getStationObservations(point.properties.observationStations),
+  ]);
+
+  const hourly = hourlyForecast.properties.periods;
+  const observation = stationData.observations[0];
+  const fallback = hourly[0];
+  const temperatureF = observation?.temperature
+    ? celsiusToFahrenheit(observation.temperature.value)
+    : (fallback?.temperature ?? null);
+  const humidity =
+    observation?.relativeHumidity.value ??
+    fallback?.relativeHumidity?.value ??
+    null;
+
+  return {
+    city: point.properties.relativeLocation?.properties?.city ?? "Your location",
+    coordinates: { latitude, longitude },
+    current: {
+      description:
+        observation?.textDescription ||
+        fallback?.shortForecast ||
+        "Conditions unavailable",
+      humidity,
+      temperatureF,
+      timestamp: observation?.timestamp ?? fallback?.startTime ?? null,
+    },
+    daily: dailyForecast.properties.periods,
+    hourly,
+    observations: stationData.observations,
+    state: point.properties.relativeLocation?.properties?.state ?? "",
+    stationId: stationData.stationId,
+    timeZone: point.properties.timeZone,
+  };
+}
+
+function zonedParts(date: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    day: "2-digit",
+    hour: "2-digit",
+    hour12: false,
+    hourCycle: "h23",
+    minute: "2-digit",
+    month: "2-digit",
+    timeZone,
+    year: "numeric",
+  }).formatToParts(date);
+
+  return Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+}
+
+function localDateKey(date: Date, timeZone: string) {
+  const parts = zonedParts(date, timeZone);
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function closestDisplayHour(now: Date, timeZone: string) {
+  const parts = zonedParts(now, timeZone);
+  const fractionalHour = Number(parts.hour) + Number(parts.minute) / 60;
+  return Math.min(22, Math.max(5, Math.round(fractionalHour)));
+}
+
+function formatHour(hour: number) {
+  const period = hour >= 12 ? "PM" : "AM";
+  const displayHour = hour % 12 || 12;
+  return `${displayHour} ${period}`;
+}
+
+function formatDate(timeZone: string) {
+  return new Intl.DateTimeFormat("en-US", {
+    day: "numeric",
+    month: "short",
+    timeZone,
+    weekday: "long",
+  }).format(new Date());
+}
+
+function formatForecastDay(date: Date, timeZone: string) {
+  const weekday = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    weekday: "short",
+  }).format(date);
+  const monthDay = new Intl.DateTimeFormat("en-US", {
+    day: "numeric",
+    month: "numeric",
+    timeZone,
+  }).format(date);
+
+  return `${weekday} ${monthDay}`;
+}
+
+function maximumNoaaValue(periods: HourlyPeriod[], key: "humidity" | "rain") {
+  const values = periods
+    .map((period) =>
+      key === "humidity"
+        ? (period.relativeHumidity?.value ?? null)
+        : (period.probabilityOfPrecipitation?.value ?? null),
+    )
+    .filter((value): value is number => value !== null);
+
+  return values.length ? Math.max(...values) : null;
+}
+
+function formatUpdated(timestamp: string | null, timeZone: string) {
+  if (!timestamp) return "update time unavailable";
+  return `observed ${new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone,
+  }).format(new Date(timestamp))}`;
+}
+
+function WeatherIcon({
+  description,
+  isDaytime = true,
+  size,
+  strokeWidth,
+}: {
+  description: string;
+  isDaytime?: boolean;
+  size: number;
+  strokeWidth?: number;
+}) {
+  const value = description.toLowerCase();
+  const props = { "aria-hidden": true, size, strokeWidth };
+
+  if (value.includes("thunder")) return <CloudLightning {...props} />;
+  if (value.includes("snow") || value.includes("sleet")) {
+    return <Snowflake {...props} />;
+  }
+  if (
+    value.includes("rain") ||
+    value.includes("shower") ||
+    value.includes("drizzle")
+  ) {
+    return <CloudRain {...props} />;
+  }
+  if (value.includes("fog") || value.includes("haze") || value.includes("smoke")) {
+    return <CloudFog {...props} />;
+  }
+  if (
+    value.includes("partly") ||
+    value.includes("mostly sunny") ||
+    value.includes("mostly clear")
+  ) {
+    return <CloudSun {...props} />;
+  }
+  if (value.includes("cloud") || value.includes("overcast")) {
+    return <Cloud {...props} />;
+  }
+  return isDaytime ? <Sun {...props} /> : <Moon {...props} />;
+}
+
+function readableError(error: GeolocationPositionError | Error) {
+  if ("code" in error) {
+    if (error.code === error.PERMISSION_DENIED) {
+      return "Location access was declined. Allow location access and try again.";
+    }
+    if (error.code === error.POSITION_UNAVAILABLE) {
+      return "Your location is currently unavailable.";
+    }
+    return "Finding your location took too long.";
+  }
+
+  return error.message.includes("404")
+    ? "NOAA forecasts are available for U.S. locations only."
+    : "NOAA weather data could not be reached. Please try again.";
+}
+
+export default function WeatherClient() {
+  const [phase, setPhase] = useState<LoadPhase>("locating");
+  const [weather, setWeather] = useState<WeatherData | null>(null);
+  const [error, setError] = useState("");
+  const [requestKey, setRequestKey] = useState(0);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [placeResults, setPlaceResults] = useState<PlaceResult[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState("");
+  const theme = useSyncExternalStore(
+    subscribeToTheme,
+    getStoredTheme,
+    () => "dark",
+  );
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
+
+  const searchPlaces = useCallback(
+    async (query: string, signal: AbortSignal) => {
+      setSearching(true);
+      setSearchError("");
+
+      try {
+        const url = new URL(
+          "https://geocoding-api.open-meteo.com/v1/search",
+        );
+        url.searchParams.set("name", query);
+        url.searchParams.set("count", "6");
+        url.searchParams.set("language", "en");
+        url.searchParams.set("format", "json");
+        url.searchParams.set("countryCode", "US");
+
+        const response = await fetch(url, { signal });
+
+        if (!response.ok) {
+          throw new Error(`Place search failed (${response.status})`);
+        }
+
+        const data = (await response.json()) as GeocodingResponse;
+        const results = (data.results ?? []).filter(
+          (place) => place.country_code === "US",
+        );
+
+        setPlaceResults(results);
+        setSearchError(results.length ? "" : "No U.S. places found.");
+      } catch {
+        if (signal.aborted) return;
+        setPlaceResults([]);
+        setSearchError("Place search is unavailable. Try again.");
+      } finally {
+        if (!signal.aborted) setSearching(false);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const query = searchQuery.trim();
+    if (!searchOpen || query.length < 2) return;
+
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => {
+      void searchPlaces(query, controller.signal);
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [searchOpen, searchPlaces, searchQuery]);
+
+  const loadCoordinates = useCallback(
+    async (latitude: number, longitude: number) => {
+      setPhase("loading");
+      setError("");
+
+      try {
+        const result = await getNoaaWeather(latitude, longitude);
+        updateSharedCoordinates(latitude, longitude);
+        setWeather(result);
+        setPhase("ready");
+      } catch (weatherError) {
+        setError(readableError(weatherError as Error));
+        setPhase("error");
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const sharedCoordinates =
+      requestKey === 0 ? readSharedCoordinates() : null;
+
+    if (sharedCoordinates) {
+      queueMicrotask(() => {
+        void loadCoordinates(
+          sharedCoordinates.latitude,
+          sharedCoordinates.longitude,
+        );
+      });
+      return;
+    }
+
+    if (!navigator.geolocation) {
+      queueMicrotask(() => {
+        setError("This browser does not support location access.");
+        setPhase("error");
+      });
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => loadCoordinates(coords.latitude, coords.longitude),
+      (locationError) => {
+        setError(readableError(locationError));
+        setPhase("error");
+      },
+      {
+        enableHighAccuracy: false,
+        maximumAge: 5 * 60 * 1000,
+        timeout: 15_000,
+      },
+    );
+  }, [loadCoordinates, requestKey]);
+
+  const day = useMemo(() => {
+    if (!weather) return [];
+
+    const now = new Date();
+    const today = localDateKey(now, weather.timeZone);
+    const closestHour = closestDisplayHour(now, weather.timeZone);
+    const currentHour = Number(zonedParts(now, weather.timeZone).hour);
+    const hourlyByHour = new Map<number, HourlyPeriod>();
+    const observationsByHour = new Map<number, StationObservation>();
+
+    weather.hourly.forEach((period) => {
+      const start = new Date(period.startTime);
+      const parts = zonedParts(start, weather.timeZone);
+      const hour = Number(parts.hour);
+
+      if (
+        localDateKey(start, weather.timeZone) === today &&
+        hour >= 5 &&
+        hour <= 22
+      ) {
+        hourlyByHour.set(hour, period);
+      }
+    });
+
+    weather.observations.forEach((observation) => {
+      const timestamp = new Date(observation.timestamp);
+      const parts = zonedParts(timestamp, weather.timeZone);
+      const hour = Number(parts.hour);
+      const existing = observationsByHour.get(hour);
+      const isHigherPriority =
+        !existing ||
+        observationPriority(observation) > observationPriority(existing);
+      const isNewerAtSamePriority =
+        existing &&
+        observationPriority(observation) === observationPriority(existing) &&
+        timestamp.getTime() > new Date(existing.timestamp).getTime();
+
+      if (
+        localDateKey(timestamp, weather.timeZone) === today &&
+        hour >= 5 &&
+        hour <= 22 &&
+        (isHigherPriority || isNewerAtSamePriority)
+      ) {
+        observationsByHour.set(hour, observation);
+      }
+    });
+
+    return DISPLAY_HOURS.map((hour) => ({
+      hour,
+      isClosest: hour === closestHour,
+      reading:
+        hour <= currentHour && observationsByHour.has(hour)
+          ? (() => {
+              const observation = observationsByHour.get(hour)!;
+              const precipitation =
+                observationPrecipitationInches(observation);
+              return {
+                description:
+                  observation.textDescription || "Observed conditions",
+                humidity: observation.relativeHumidity.value,
+                isDaytime: hour >= 6 && hour < 20,
+                rain:
+                  precipitation === null
+                    ? "—"
+                    : `${precipitation.toFixed(2)} in.`,
+                source: "observed" as const,
+                temperatureF: celsiusToFahrenheit(
+                  observation.temperature.value,
+                ),
+              };
+            })()
+          : hourlyByHour.has(hour)
+            ? (() => {
+                const period = hourlyByHour.get(hour)!;
+                const precipitation =
+                  period.probabilityOfPrecipitation?.value ?? null;
+                return {
+                  description: period.shortForecast,
+                  humidity: period.relativeHumidity?.value ?? null,
+                  isDaytime: period.isDaytime,
+                  rain:
+                    precipitation === null
+                      ? "—"
+                      : `${Math.round(precipitation)}%`,
+                  source: "forecast" as const,
+                  temperatureF: period.temperature,
+                };
+              })()
+            : null,
+    }));
+  }, [weather]);
+
+  const sevenDay = useMemo(() => {
+    if (!weather) return [];
+
+    const periodsByDate = new Map<string, HourlyPeriod[]>();
+    const hourlyByDate = new Map<string, HourlyPeriod[]>();
+
+    weather.daily.forEach((period) => {
+      const start = new Date(period.startTime);
+      const dateKey = localDateKey(start, weather.timeZone);
+      const periods = periodsByDate.get(dateKey) ?? [];
+      periods.push(period);
+      periodsByDate.set(dateKey, periods);
+    });
+
+    weather.hourly.forEach((period) => {
+      const dateKey = localDateKey(
+        new Date(period.startTime),
+        weather.timeZone,
+      );
+      const periods = hourlyByDate.get(dateKey) ?? [];
+      periods.push(period);
+      hourlyByDate.set(dateKey, periods);
+    });
+
+    return Array.from(periodsByDate.entries())
+      .slice(0, 7)
+      .map(([dateKey, periods]) => {
+        const daytime = periods.find((period) => period.isDaytime);
+        const nighttime = periods.find((period) => !period.isDaytime);
+        const representative = daytime ?? nighttime ?? periods[0];
+        const hourlyPeriods = hourlyByDate.get(dateKey) ?? [];
+
+        return {
+          date: formatForecastDay(
+            new Date(representative.startTime),
+            weather.timeZone,
+          ),
+          description: representative.shortForecast,
+          high: daytime?.temperature ?? null,
+          humidity:
+            maximumNoaaValue(periods, "humidity") ??
+            maximumNoaaValue(hourlyPeriods, "humidity"),
+          isDaytime: representative.isDaytime,
+          low: nighttime?.temperature ?? null,
+          rain: maximumNoaaValue(
+            [...periods, ...hourlyPeriods],
+            "rain",
+          ),
+        };
+      });
+  }, [weather]);
+
+  const retryLocation = () => {
+    setPhase("locating");
+    setError("");
+    setRequestKey((value) => value + 1);
+  };
+
+  const closePlaceSearch = () => {
+    setSearchOpen(false);
+    setSearching(false);
+  };
+
+  const selectPlace = (place: PlaceResult) => {
+    closePlaceSearch();
+    setSearchQuery("");
+    setPlaceResults([]);
+    setSearchError("");
+    void loadCoordinates(place.latitude, place.longitude);
+  };
+
+  return (
+    <main className="weather-shell">
+      <header className="site-header">
+        <div className="header-line">
+          <Link className="site-title" href="/">
+            weather.schollz.com
+          </Link>
+          <div className="header-actions">
+            <button
+              aria-controls="place-search"
+              aria-expanded={searchOpen}
+              aria-label={
+                searchOpen ? "Close place search" : "Search U.S. places"
+              }
+              className="icon-button"
+              onClick={() => {
+                if (searchOpen) closePlaceSearch();
+                else setSearchOpen(true);
+              }}
+              type="button"
+            >
+              <Search aria-hidden="true" size={14} />
+            </button>
+            <button
+              className="icon-button"
+              type="button"
+              aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+              onClick={() => saveTheme(theme === "dark" ? "light" : "dark")}
+            >
+              {theme === "dark" ? (
+                <Sun aria-hidden="true" size={14} />
+              ) : (
+                <Moon aria-hidden="true" size={14} />
+              )}
+            </button>
+          </div>
+        </div>
+
+        {searchOpen ? (
+          <div
+            aria-label="Search U.S. places"
+            className="place-search"
+            id="place-search"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") closePlaceSearch();
+            }}
+            role="dialog"
+          >
+            <div className="search-heading">
+              <span>search U.S. weather</span>
+              <button
+                aria-label="Close place search"
+                className="search-close"
+                onClick={closePlaceSearch}
+                type="button"
+              >
+                <X aria-hidden="true" size={14} />
+              </button>
+            </div>
+
+            <form onSubmit={(event) => event.preventDefault()}>
+              <label className="sr-only" htmlFor="place-query">
+                City or ZIP code
+              </label>
+              <div className="search-input-row">
+                <Search aria-hidden="true" size={14} />
+                <input
+                  autoComplete="off"
+                  autoFocus
+                  id="place-query"
+                  onChange={(event) => {
+                    setSearchQuery(event.target.value);
+                    setPlaceResults([]);
+                    setSearchError("");
+                    setSearching(false);
+                  }}
+                  placeholder="City or ZIP code"
+                  type="search"
+                  value={searchQuery}
+                />
+              </div>
+            </form>
+
+            <p aria-live="polite" className="search-hint">
+              {searchError ||
+                (searching
+                  ? "Searching..."
+                  : searchQuery.trim().length === 1
+                    ? "Enter at least two characters."
+                    : "U.S. locations only")}
+            </p>
+
+            {placeResults.length ? (
+              <ul className="search-results">
+                {placeResults.map((place) => (
+                  <li key={place.id}>
+                    <button
+                      className="search-result"
+                      onClick={() => selectPlace(place)}
+                      type="button"
+                    >
+                      <strong>{place.name}</strong>
+                      <span>
+                        {[place.admin2, place.admin1]
+                          .filter(Boolean)
+                          .join(", ")}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        ) : null}
+      </header>
+
+      {phase === "ready" && weather ? (
+        <>
+          <section className="current-panel" aria-labelledby="current-heading">
+            <p className="section-label">Weather for</p>
+            <h1 id="current-heading">
+              <MapPin aria-hidden="true" size={15} />
+              {weather.city}
+              {weather.state ? `, ${weather.state}` : ""}
+            </h1>
+            <p className="meta-line">
+              {formatDate(weather.timeZone)} /{" "}
+              {formatUpdated(weather.current.timestamp, weather.timeZone)}
+            </p>
+
+            <div className="text-rule" aria-hidden="true" />
+
+            <p className="section-label">Current conditions</p>
+            <div className="current-reading">
+              <WeatherIcon
+                description={weather.current.description}
+                size={27}
+                strokeWidth={1.5}
+              />
+              <div>
+                <strong className="current-temperature">
+                  {weather.current.temperatureF === null
+                    ? "—"
+                    : `${Math.round(weather.current.temperatureF)}°F`}
+                </strong>
+                <span className="condition-text">
+                  {weather.current.description}
+                </span>
+              </div>
+            </div>
+
+            <div className="current-facts">
+              <span>
+                <Droplets aria-hidden="true" size={14} />
+                humidity:{" "}
+                <strong>
+                  {weather.current.humidity === null
+                    ? "—"
+                    : `${Math.round(weather.current.humidity)}%`}
+                </strong>
+              </span>
+              <span>
+                <Wind aria-hidden="true" size={14} />
+                wind:{" "}
+                <strong>{weather.hourly[0]?.windSpeed ?? "—"}</strong>
+              </span>
+            </div>
+          </section>
+
+          <div className="ascii-rule" aria-hidden="true">
+            ============================================================
+          </div>
+
+          <section className="hourly-panel" aria-label="Hourly weather">
+            <div className="hourly-heading">
+              <div>
+                <p>{formatDate(weather.timeZone)}</p>
+              </div>
+            </div>
+
+            <div className="forecast-labels" aria-hidden="true">
+              <span />
+              <span>time</span>
+              <span>sky</span>
+              <span>temp</span>
+              <span>humid</span>
+              <span>rain*</span>
+            </div>
+
+            <ol className="hourly-list">
+              {day.map(({ hour, isClosest, reading }) => (
+                <li className={isClosest ? "closest" : ""} key={hour}>
+                  <span className="now-marker" aria-hidden="true">
+                    {isClosest ? ">" : ""}
+                  </span>
+                  <time>{formatHour(hour)}</time>
+                  <span
+                    className="weather-cell-icon"
+                    aria-label={reading?.description ?? "Unavailable"}
+                    title={
+                      reading
+                        ? `${reading.description} — ${reading.source}`
+                        : "Unavailable"
+                    }
+                  >
+                    {reading ? (
+                      <WeatherIcon
+                        description={reading.description}
+                        isDaytime={reading.isDaytime}
+                        size={15}
+                      />
+                    ) : (
+                      "—"
+                    )}
+                  </span>
+                  <span>
+                    {reading?.temperatureF === null ||
+                    reading?.temperatureF === undefined
+                      ? "—"
+                      : `${Math.round(reading.temperatureF)}°F`}
+                  </span>
+                  <span>
+                    {reading?.humidity === null ||
+                    reading?.humidity === undefined
+                      ? "—"
+                      : `${Math.round(reading.humidity)}%`}
+                  </span>
+                  <span>{reading?.rain ?? "—"}</span>
+                </li>
+              ))}
+            </ol>
+
+            <p className="table-note">
+              * past = observed 1h rainfall (in.) / future = precipitation
+              chance. Earlier hours use station {weather.stationId ?? "data"}.
+            </p>
+          </section>
+
+          <div className="ascii-rule" aria-hidden="true">
+            ============================================================
+          </div>
+
+          <section
+            aria-labelledby="daily-heading"
+            className="daily-panel"
+          >
+            <h2 id="daily-heading">7-day forecast</h2>
+
+            <div className="daily-labels" aria-hidden="true">
+              <span>day</span>
+              <span>sky</span>
+              <span>high</span>
+              <span>low</span>
+              <span>humid</span>
+              <span>rain</span>
+            </div>
+
+            <ol className="daily-list">
+              {sevenDay.map((forecast) => (
+                <li key={forecast.date}>
+                  <time>{forecast.date}</time>
+                  <span
+                    aria-label={forecast.description}
+                    className="weather-cell-icon"
+                    title={forecast.description}
+                  >
+                    <WeatherIcon
+                      description={forecast.description}
+                      isDaytime={forecast.isDaytime}
+                      size={15}
+                    />
+                  </span>
+                  <span>
+                    {forecast.high === null
+                      ? "—"
+                      : `${Math.round(forecast.high)}°F`}
+                  </span>
+                  <span>
+                    {forecast.low === null
+                      ? "—"
+                      : `${Math.round(forecast.low)}°F`}
+                  </span>
+                  <span>
+                    {forecast.humidity === null
+                      ? "—"
+                      : `${Math.round(forecast.humidity)}%`}
+                  </span>
+                  <span>
+                    {forecast.rain === null
+                      ? "—"
+                      : `${Math.round(forecast.rain)}%`}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          </section>
+
+          <div className="ascii-rule" aria-hidden="true">
+            ============================================================
+          </div>
+
+          <footer className="site-footer">
+            <p>
+              location: {weather.coordinates.latitude.toFixed(3)},{" "}
+              {weather.coordinates.longitude.toFixed(3)}
+            </p>
+            <p>
+              data:{" "}
+              <a
+                href="https://www.weather.gov/documentation/services-web-api"
+                target="_blank"
+                rel="noreferrer"
+              >
+                weather.gov
+              </a>
+            </p>
+            {weather.stationId ? (
+              <p>
+                history:{" "}
+                <a
+                  href={`https://www.weather.gov/wrh/timeseries?site=${weather.stationId}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  station {weather.stationId}
+                </a>
+              </p>
+            ) : null}
+            <button
+              className="text-button"
+              onClick={() =>
+                loadCoordinates(
+                  weather.coordinates.latitude,
+                  weather.coordinates.longitude,
+                )
+              }
+              type="button"
+            >
+              <RefreshCw aria-hidden="true" size={13} />
+              refresh forecast
+            </button>
+          </footer>
+        </>
+      ) : (
+        <section className="status-panel" aria-live="polite">
+          <LocateFixed
+            className="status-glyph"
+            aria-hidden="true"
+            size={24}
+            strokeWidth={1.5}
+          />
+          {phase === "error" ? (
+            <>
+              <p className="status-code">&gt; location / data error</p>
+              <h1>{error}</h1>
+              <p>
+                Your coordinates go directly from this browser to NOAA and are
+                not stored by this site.
+              </p>
+              <div className="status-actions">
+                <button
+                  className="primary-button"
+                  onClick={retryLocation}
+                  type="button"
+                >
+                  &gt; try location again
+                </button>
+                <button
+                  className="secondary-button"
+                  onClick={() =>
+                    loadCoordinates(SEATTLE.latitude, SEATTLE.longitude)
+                  }
+                  type="button"
+                >
+                  &gt; preview seattle
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="status-code">
+                &gt; {phase === "locating" ? "locating" : "contacting noaa"}
+                <span className="loading-dots" aria-hidden="true">
+                  ...
+                </span>
+              </p>
+              <h1>
+                {phase === "locating"
+                  ? "Finding your local weather."
+                  : "Reading the latest forecast."}
+              </h1>
+              <p>
+                Allow location access when prompted. NOAA covers U.S. locations.
+              </p>
+            </>
+          )}
+        </section>
+      )}
+    </main>
+  );
+}
