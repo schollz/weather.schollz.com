@@ -37,6 +37,14 @@ const THEME_CHANGE_EVENT = "wx-theme-change";
 type LoadPhase = "locating" | "loading" | "ready" | "error";
 type Theme = "light" | "dark";
 
+type TooltipState = {
+  horizontalOffset: number;
+  horizontalSide: "left" | "right";
+  placement: "above" | "below";
+  text: string;
+  verticalOffset: number;
+};
+
 type PlaceResult = {
   admin1?: string;
   admin2?: string;
@@ -70,6 +78,102 @@ function subscribeToTheme(onStoreChange: () => void) {
     window.removeEventListener("storage", handleStorage);
     window.removeEventListener(THEME_CHANGE_EVENT, onStoreChange);
   };
+}
+
+function useTooltip() {
+  const [tooltip, setTooltip] = useState<TooltipState | null>(null);
+
+  useEffect(() => {
+    const tooltipTarget = (event: Event) =>
+      event.target instanceof Element
+        ? event.target.closest<HTMLElement>(".hover-tip[data-tooltip]")
+        : null;
+
+    const showTooltip = (target: HTMLElement) => {
+      const text = target.dataset.tooltip;
+      if (!text) return;
+
+      const rect = target.getBoundingClientRect();
+      const horizontalSide =
+        rect.left + rect.width / 2 > window.innerWidth / 2 ? "right" : "left";
+      const placement =
+        target.classList.contains("header-tip") ||
+        rect.top < window.innerHeight / 2
+          ? "below"
+          : "above";
+
+      setTooltip({
+        horizontalOffset:
+          horizontalSide === "right"
+            ? Math.max(16, window.innerWidth - rect.right)
+            : Math.max(16, rect.left),
+        horizontalSide,
+        placement,
+        text,
+        verticalOffset:
+          placement === "below"
+            ? rect.bottom + 7
+            : window.innerHeight - rect.top + 7,
+      });
+    };
+
+    const handleMouseOver = (event: MouseEvent) => {
+      const target = tooltipTarget(event);
+      if (!target) return;
+
+      if (
+        event.relatedTarget instanceof Node &&
+        target.contains(event.relatedTarget)
+      ) {
+        return;
+      }
+
+      showTooltip(target);
+    };
+
+    const handleMouseOut = (event: MouseEvent) => {
+      const target = tooltipTarget(event);
+      if (!target) return;
+
+      if (
+        event.relatedTarget instanceof Node &&
+        target.contains(event.relatedTarget)
+      ) {
+        return;
+      }
+
+      setTooltip(null);
+    };
+
+    const handleFocusIn = (event: FocusEvent) => {
+      const target = tooltipTarget(event);
+      if (target) showTooltip(target);
+    };
+
+    const handleFocusOut = (event: FocusEvent) => {
+      if (tooltipTarget(event)) setTooltip(null);
+    };
+
+    const hideTooltip = () => setTooltip(null);
+
+    document.addEventListener("mouseover", handleMouseOver);
+    document.addEventListener("mouseout", handleMouseOut);
+    document.addEventListener("focusin", handleFocusIn);
+    document.addEventListener("focusout", handleFocusOut);
+    document.addEventListener("scroll", hideTooltip, true);
+    window.addEventListener("resize", hideTooltip);
+
+    return () => {
+      document.removeEventListener("mouseover", handleMouseOver);
+      document.removeEventListener("mouseout", handleMouseOut);
+      document.removeEventListener("focusin", handleFocusIn);
+      document.removeEventListener("focusout", handleFocusOut);
+      document.removeEventListener("scroll", hideTooltip, true);
+      window.removeEventListener("resize", hideTooltip);
+    };
+  }, []);
+
+  return tooltip;
 }
 
 function saveTheme(theme: Theme) {
@@ -616,6 +720,7 @@ export default function WeatherClient() {
     getStoredTheme,
     () => "dark",
   );
+  const tooltip = useTooltip();
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -1386,6 +1491,22 @@ export default function WeatherClient() {
           )}
         </section>
       )}
+      {tooltip ? (
+        <div
+          className="tooltip-layer"
+          role="tooltip"
+          style={{
+            ...(tooltip.horizontalSide === "right"
+              ? { right: tooltip.horizontalOffset }
+              : { left: tooltip.horizontalOffset }),
+            ...(tooltip.placement === "below"
+              ? { top: tooltip.verticalOffset }
+              : { bottom: tooltip.verticalOffset }),
+          }}
+        >
+          {tooltip.text}
+        </div>
+      ) : null}
     </main>
   );
 }

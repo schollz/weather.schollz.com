@@ -398,15 +398,12 @@ a {
 }
 
 .hover-tip[data-tooltip] {
-  position: relative;
   cursor: pointer;
 }
 
-.hover-tip[data-tooltip]::after {
-  position: absolute;
+.tooltip-layer {
+  position: fixed;
   z-index: 40;
-  bottom: calc(100% + 7px);
-  left: 0;
   width: max-content;
   max-width: min(240px, calc(100vw - 32px));
   padding: 6px 8px;
@@ -415,28 +412,14 @@ a {
   box-shadow: 3px 3px 0
     color-mix(in srgb, var(--foreground) 14%, transparent);
   color: var(--foreground);
-  content: attr(data-tooltip);
   font-size: 10px;
   font-weight: 400;
   line-height: 1.4;
-  opacity: 0;
   pointer-events: none;
   text-align: left;
   text-transform: none;
-  transform: translateY(3px);
-  transition:
-    opacity 80ms linear,
-    transform 80ms ease-out,
-    visibility 80ms linear;
-  visibility: hidden;
   white-space: normal;
-}
-
-.hover-tip[data-tooltip]:hover::after,
-.hover-tip[data-tooltip]:focus-visible::after {
-  opacity: 1;
-  transform: translateY(0);
-  visibility: visible;
+  animation: tooltip-in 80ms ease-out;
 }
 
 .hover-tip[data-tooltip]:focus-visible {
@@ -444,16 +427,11 @@ a {
   outline-offset: 2px;
 }
 
-.header-tip::after {
-  top: calc(100% + 7px);
-  right: 0;
-  bottom: auto;
-  left: auto;
-}
-
-.daily-list li > .hover-tip:nth-child(n + 6)::after {
-  right: 0;
-  left: auto;
+@keyframes tooltip-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
 }
 
 .table-note {
