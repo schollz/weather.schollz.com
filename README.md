@@ -9,8 +9,9 @@ A minimal local weather page powered by
 
 The site uses your browser location or a U.S. place search to show current
 conditions, hourly details, and a seven-day forecast. Forecast data comes
-directly from NOAA; place search uses Open-Meteo. Locations can be shared by URL,
-and no API keys or backend are required.
+directly from NOAA, daily temperature records come from ACIS, and place search
+uses Open-Meteo. Locations can be shared by URL, and no API keys or backend are
+required.
 
 ## Development
 

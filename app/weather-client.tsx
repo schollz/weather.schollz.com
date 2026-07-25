@@ -28,6 +28,7 @@ import {
 
 const DISPLAY_HOURS = Array.from({ length: 18 }, (_, index) => index + 5);
 const SEATTLE = { latitude: 47.6062, longitude: -122.3321 };
+const ACIS_STATION_DATA_URL = "https://data.rcc-acis.org/StnData";
 const LOCATION_QUERY_KEY = "location";
 const SEARCH_DEBOUNCE_MS = 350;
 const THEME_STORAGE_KEY = "wx-theme";
@@ -149,6 +150,26 @@ type WeatherData = {
   state: string;
   stationId: string | null;
   timeZone: string;
+};
+
+type ClimateRecordValue = {
+  date: string;
+  temperatureF: number;
+};
+
+type ClimateRecord = {
+  high: ClimateRecordValue | null;
+  low: ClimateRecordValue | null;
+};
+
+type ClimateRecords = Record<string, ClimateRecord>;
+
+type AcisResponse = {
+  error?: string;
+  meta?: {
+    name?: string;
+  };
+  smry?: unknown[];
 };
 
 type PointResponse = {
@@ -326,6 +347,84 @@ async function getNoaaWeather(
   };
 }
 
+function addAcisSummaries(
+  records: ClimateRecords,
+  summaries: unknown,
+  kind: keyof ClimateRecord,
+) {
+  if (!Array.isArray(summaries)) return;
+
+  summaries.forEach((summary) => {
+    if (!Array.isArray(summary) || summary.length < 2) return;
+
+    const temperatureF = Number(summary[0]);
+    const date = summary[1];
+    const dateMatch =
+      typeof date === "string"
+        ? /^\d{4}-(\d{2})-(\d{2})$/.exec(date)
+        : null;
+
+    if (!Number.isFinite(temperatureF) || !dateMatch) return;
+
+    const monthDay = `${dateMatch[1]}-${dateMatch[2]}`;
+    const record = records[monthDay] ?? { high: null, low: null };
+    record[kind] = { date, temperatureF };
+    records[monthDay] = record;
+  });
+}
+
+async function getAcisDailyRecords(
+  stationId: string,
+  signal: AbortSignal,
+): Promise<{ records: ClimateRecords; stationName: string | null }> {
+  const params = {
+    sid: stationId,
+    sdate: "por",
+    edate: "por",
+    meta: ["name", "state"],
+    elems: [
+      {
+        name: "maxt",
+        interval: "dly",
+        duration: "dly",
+        smry: { reduce: "max", add: "date" },
+        smry_only: 1,
+        groupby: "year",
+      },
+      {
+        name: "mint",
+        interval: "dly",
+        duration: "dly",
+        smry: { reduce: "min", add: "date" },
+        smry_only: 1,
+        groupby: "year",
+      },
+    ],
+  };
+  const response = await fetch(ACIS_STATION_DATA_URL, {
+    body: new URLSearchParams({ params: JSON.stringify(params) }),
+    method: "POST",
+    signal,
+  });
+
+  if (!response.ok) {
+    throw new Error(`ACIS request failed (${response.status})`);
+  }
+
+  const data = (await response.json()) as AcisResponse;
+
+  if (data.error) throw new Error(data.error);
+
+  const records: ClimateRecords = {};
+  addAcisSummaries(records, data.smry?.[0], "high");
+  addAcisSummaries(records, data.smry?.[1], "low");
+
+  return {
+    records,
+    stationName: data.meta?.name ?? null,
+  };
+}
+
 function zonedParts(date: Date, timeZone: string) {
   const parts = new Intl.DateTimeFormat("en-CA", {
     day: "2-digit",
@@ -381,16 +480,52 @@ function formatForecastDay(date: Date, timeZone: string) {
   return `${weekday} ${monthDay}`;
 }
 
-function maximumNoaaValue(periods: HourlyPeriod[], key: "humidity" | "rain") {
-  const values = periods
-    .map((period) =>
-      key === "humidity"
-        ? (period.relativeHumidity?.value ?? null)
-        : (period.probabilityOfPrecipitation?.value ?? null),
-    )
-    .filter((value): value is number => value !== null);
+function formatRecordTitle(
+  kind: "high" | "low",
+  record: ClimateRecordValue | null,
+) {
+  if (!record) return undefined;
 
-  return values.length ? Math.max(...values) : null;
+  const date = new Intl.DateTimeFormat("en-US", {
+    day: "numeric",
+    month: "long",
+    timeZone: "UTC",
+    year: "numeric",
+  }).format(new Date(`${record.date}T00:00:00Z`));
+
+  return `Record ${kind}: ${Math.round(record.temperatureF)}°F on ${date}`;
+}
+
+type PrecipitationPeak = {
+  startTime: string;
+  value: number;
+};
+
+function maximumPrecipitationChance(
+  periods: HourlyPeriod[],
+): PrecipitationPeak | null {
+  return periods.reduce<PrecipitationPeak | null>((highest, period) => {
+    const value = period.probabilityOfPrecipitation?.value ?? null;
+
+    if (value === null || (highest && value <= highest.value)) return highest;
+
+    return { startTime: period.startTime, value };
+  }, null);
+}
+
+function formatRainTitle(
+  rain: PrecipitationPeak | null,
+  timeZone: string,
+) {
+  if (!rain) return undefined;
+
+  const time = new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    timeZone,
+    timeZoneName: "short",
+  }).format(new Date(rain.startTime));
+
+  return `Highest rain chance: ${Math.round(rain.value)}% at ${time}`;
 }
 
 function formatUpdated(timestamp: string | null, timeZone: string) {
@@ -469,6 +604,13 @@ export default function WeatherClient() {
   const [placeResults, setPlaceResults] = useState<PlaceResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState("");
+  const [climateRecords, setClimateRecords] = useState<ClimateRecords>({});
+  const [climateRecordStationId, setClimateRecordStationId] = useState<
+    string | null
+  >(null);
+  const [climateStationName, setClimateStationName] = useState<string | null>(
+    null,
+  );
   const theme = useSyncExternalStore(
     subscribeToTheme,
     getStoredTheme,
@@ -551,6 +693,30 @@ export default function WeatherClient() {
     [],
   );
 
+  const stationId = weather?.stationId ?? null;
+
+  useEffect(() => {
+    if (!stationId) return;
+
+    const controller = new AbortController();
+
+    void getAcisDailyRecords(stationId, controller.signal)
+      .then(({ records, stationName }) => {
+        if (controller.signal.aborted) return;
+        setClimateRecords(records);
+        setClimateRecordStationId(stationId);
+        setClimateStationName(stationName);
+      })
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        setClimateRecords({});
+        setClimateRecordStationId(null);
+        setClimateStationName(null);
+      });
+
+    return () => controller.abort();
+  }, [stationId, weather]);
+
   useEffect(() => {
     const sharedCoordinates =
       requestKey === 0 ? readSharedCoordinates() : null;
@@ -581,7 +747,7 @@ export default function WeatherClient() {
       },
       {
         enableHighAccuracy: false,
-        maximumAge: 5 * 60 * 1000,
+        maximumAge: requestKey === 0 ? 5 * 60 * 1000 : 0,
         timeout: 15_000,
       },
     );
@@ -682,6 +848,7 @@ export default function WeatherClient() {
   const sevenDay = useMemo(() => {
     if (!weather) return [];
 
+    const today = localDateKey(new Date(), weather.timeZone);
     const periodsByDate = new Map<string, HourlyPeriod[]>();
     const hourlyByDate = new Map<string, HourlyPeriod[]>();
 
@@ -710,6 +877,10 @@ export default function WeatherClient() {
         const nighttime = periods.find((period) => !period.isDaytime);
         const representative = daytime ?? nighttime ?? periods[0];
         const hourlyPeriods = hourlyByDate.get(dateKey) ?? [];
+        const record =
+          climateRecordStationId === stationId
+            ? climateRecords[dateKey.slice(5)]
+            : undefined;
 
         return {
           date: formatForecastDay(
@@ -718,20 +889,19 @@ export default function WeatherClient() {
           ),
           description: representative.shortForecast,
           high: daytime?.temperature ?? null,
-          humidity:
-            maximumNoaaValue(periods, "humidity") ??
-            maximumNoaaValue(hourlyPeriods, "humidity"),
           isDaytime: representative.isDaytime,
+          isToday: dateKey === today,
           low: nighttime?.temperature ?? null,
-          rain: maximumNoaaValue(
-            [...periods, ...hourlyPeriods],
-            "rain",
-          ),
+          rain: maximumPrecipitationChance([...hourlyPeriods, ...periods]),
+          recordHigh: record?.high ?? null,
+          recordLow: record?.low ?? null,
         };
       });
-  }, [weather]);
+  }, [climateRecordStationId, climateRecords, stationId, weather]);
 
   const retryLocation = () => {
+    setSearchOpen(false);
+    setSearching(false);
     setPhase("locating");
     setError("");
     setRequestKey((value) => value + 1);
@@ -754,7 +924,14 @@ export default function WeatherClient() {
     <main className="weather-shell">
       <header className="site-header">
         <div className="header-line">
-          <Link className="site-title" href="/">
+          <Link
+            className="site-title"
+            href="/"
+            onClick={(event) => {
+              event.preventDefault();
+              retryLocation();
+            }}
+          >
             weather.schollz.com
           </Link>
           <div className="header-actions">
@@ -764,7 +941,10 @@ export default function WeatherClient() {
               aria-label={
                 searchOpen ? "Close place search" : "Search U.S. places"
               }
-              className="icon-button"
+              className="icon-button hover-tip header-tip"
+              data-tooltip={
+                searchOpen ? "Close place search" : "Search U.S. places"
+              }
               onClick={() => {
                 if (searchOpen) closePlaceSearch();
                 else setSearchOpen(true);
@@ -774,9 +954,19 @@ export default function WeatherClient() {
               <Search aria-hidden="true" size={14} />
             </button>
             <button
-              className="icon-button"
+              aria-label="Use current location"
+              className="icon-button hover-tip header-tip"
+              data-tooltip="Use current location"
+              onClick={retryLocation}
+              type="button"
+            >
+              <LocateFixed aria-hidden="true" size={14} />
+            </button>
+            <button
+              className="icon-button hover-tip header-tip"
               type="button"
               aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+              data-tooltip={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
               onClick={() => saveTheme(theme === "dark" ? "light" : "dark")}
             >
               {theme === "dark" ? (
@@ -947,13 +1137,14 @@ export default function WeatherClient() {
                   </span>
                   <time>{formatHour(hour)}</time>
                   <span
-                    className="weather-cell-icon"
+                    className="weather-cell-icon hover-tip"
                     aria-label={reading?.description ?? "Unavailable"}
-                    title={
+                    data-tooltip={
                       reading
                         ? `${reading.description} — ${reading.source}`
                         : "Unavailable"
                     }
+                    tabIndex={0}
                   >
                     {reading ? (
                       <WeatherIcon
@@ -1003,18 +1194,23 @@ export default function WeatherClient() {
               <span>sky</span>
               <span>high</span>
               <span>low</span>
-              <span>humid</span>
+              <span>rec hi</span>
+              <span>rec lo</span>
               <span>rain</span>
             </div>
 
             <ol className="daily-list">
               {sevenDay.map((forecast) => (
-                <li key={forecast.date}>
+                <li
+                  className={forecast.isToday ? "today" : undefined}
+                  key={forecast.date}
+                >
                   <time>{forecast.date}</time>
                   <span
                     aria-label={forecast.description}
-                    className="weather-cell-icon"
-                    title={forecast.description}
+                    className="weather-cell-icon hover-tip"
+                    data-tooltip={forecast.description}
+                    tabIndex={0}
                   >
                     <WeatherIcon
                       description={forecast.description}
@@ -1032,15 +1228,44 @@ export default function WeatherClient() {
                       ? "—"
                       : `${Math.round(forecast.low)}°F`}
                   </span>
-                  <span>
-                    {forecast.humidity === null
+                  <span
+                    aria-label={formatRecordTitle("high", forecast.recordHigh)}
+                    className={forecast.recordHigh ? "hover-tip" : undefined}
+                    data-tooltip={formatRecordTitle(
+                      "high",
+                      forecast.recordHigh,
+                    )}
+                    tabIndex={forecast.recordHigh ? 0 : undefined}
+                  >
+                    {forecast.recordHigh === null
                       ? "—"
-                      : `${Math.round(forecast.humidity)}%`}
+                      : `${Math.round(forecast.recordHigh.temperatureF)}°F`}
                   </span>
-                  <span>
+                  <span
+                    aria-label={formatRecordTitle("low", forecast.recordLow)}
+                    className={forecast.recordLow ? "hover-tip" : undefined}
+                    data-tooltip={formatRecordTitle("low", forecast.recordLow)}
+                    tabIndex={forecast.recordLow ? 0 : undefined}
+                  >
+                    {forecast.recordLow === null
+                      ? "—"
+                      : `${Math.round(forecast.recordLow.temperatureF)}°F`}
+                  </span>
+                  <span
+                    aria-label={formatRainTitle(
+                      forecast.rain,
+                      weather.timeZone,
+                    )}
+                    className={forecast.rain ? "hover-tip" : undefined}
+                    data-tooltip={formatRainTitle(
+                      forecast.rain,
+                      weather.timeZone,
+                    )}
+                    tabIndex={forecast.rain ? 0 : undefined}
+                  >
                     {forecast.rain === null
                       ? "—"
-                      : `${Math.round(forecast.rain)}%`}
+                      : `${Math.round(forecast.rain.value)}%`}
                   </span>
                 </li>
               ))}
@@ -1075,6 +1300,19 @@ export default function WeatherClient() {
                   rel="noreferrer"
                 >
                   station {weather.stationId}
+                </a>
+              </p>
+            ) : null}
+            {climateRecordStationId === stationId &&
+            Object.keys(climateRecords).length ? (
+              <p>
+                records:{" "}
+                <a
+                  href="https://builder.rcc-acis.org/"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  ACIS / {climateStationName ?? stationId}
                 </a>
               </p>
             ) : null}

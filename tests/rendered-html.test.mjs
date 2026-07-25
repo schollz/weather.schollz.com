@@ -26,6 +26,18 @@ test("server-renders the local NOAA weather app", async () => {
   );
   assert.match(
     html,
+    /<link rel="canonical" href="https:\/\/weather\.schollz\.com\/?"/i,
+  );
+  assert.match(
+    html,
+    /<link href="favicon\.svg" rel="icon" type="image\/svg\+xml"/i,
+  );
+  assert.match(html, /property="og:title" content="Local NOAA weather"/i);
+  assert.match(html, /name="twitter:card" content="summary"/i);
+  assert.match(html, /type="application\/ld\+json"/i);
+  assert.match(html, /"@type":"WebApplication"/i);
+  assert.match(
+    html,
     /<a[^>]*href="\/"[^>]*>weather\.schollz\.com<\/a>/i,
   );
   assert.match(html, /locating/);
@@ -42,6 +54,10 @@ test("keeps NOAA requests and geolocation in the client app", async () => {
   assert.match(page, /navigator\.geolocation\.getCurrentPosition/);
   assert.match(
     page,
+    /maximumAge: requestKey === 0 \? 5 \* 60 \* 1000 : 0/,
+  );
+  assert.match(
+    page,
     /new URLSearchParams\(window\.location\.search\)\.get\(/,
   );
   assert.match(page, /LOCATION_QUERY_KEY = "location"/);
@@ -53,6 +69,8 @@ test("keeps NOAA requests and geolocation in the client app", async () => {
   );
   assert.match(page, /url\.searchParams\.set\("countryCode", "US"\)/);
   assert.match(page, /Search U\.S\. places/);
+  assert.match(page, /aria-label="Use current location"/);
+  assert.match(page, /event\.preventDefault\(\);\s+retryLocation\(\);/);
   assert.match(page, /SEARCH_DEBOUNCE_MS = 350/);
   assert.match(page, /window\.setTimeout/);
   assert.match(page, /controller\.abort\(\)/);
@@ -65,9 +83,23 @@ test("keeps NOAA requests and geolocation in the client app", async () => {
   );
   assert.match(page, /forecastHourly/);
   assert.match(page, /7-day forecast/);
-  assert.match(page, /maximumNoaaValue/);
+  assert.match(page, /https:\/\/data\.rcc-acis\.org\/StnData/);
+  assert.match(page, /groupby: "year"/);
+  assert.match(page, /smry: \{ reduce: "max", add: "date" \}/);
+  assert.match(page, /smry: \{ reduce: "min", add: "date" \}/);
+  assert.match(page, /Record \$\{kind\}:/);
+  assert.match(page, /rec hi/);
+  assert.match(page, /rec lo/);
+  assert.match(page, /isToday: dateKey === today/);
+  assert.match(page, /className=\{forecast\.isToday \? "today" : undefined\}/);
+  assert.match(page, /maximumPrecipitationChance/);
+  assert.match(page, /Highest rain chance:/);
+  assert.match(
+    page,
+    /data-tooltip=\{formatRainTitle\(\s*forecast\.rain,\s*weather\.timeZone,/,
+  );
+  assert.doesNotMatch(page, /\btitle=/);
   assert.match(page, /period\.relativeHumidity\?\.value/);
-  assert.match(page, /maximumNoaaValue\(hourlyPeriods, "humidity"\)/);
   assert.match(page, /stationUrl}\/observations/);
   assert.match(page, /probabilityOfPrecipitation/);
   assert.match(page, /precipitationLastHour/);

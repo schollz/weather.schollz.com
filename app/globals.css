@@ -309,7 +309,7 @@ a {
 .daily-labels,
 .daily-list li {
   display: grid;
-  grid-template-columns: 90px 34px 58px 58px 62px 1fr;
+  grid-template-columns: 76px 28px 46px 46px 48px 48px 1fr;
   align-items: center;
 }
 
@@ -332,6 +332,12 @@ a {
   min-height: 34px;
   padding: 4px 5px;
   border-bottom: 1px dotted color-mix(in srgb, var(--line) 65%, transparent);
+}
+
+.daily-list li.today {
+  border-top: 1px solid var(--foreground);
+  border-bottom: 1px solid var(--foreground);
+  font-weight: 800;
 }
 
 .hourly-panel {
@@ -389,6 +395,65 @@ a {
 .weather-cell-icon {
   display: inline-flex;
   align-items: center;
+}
+
+.hover-tip[data-tooltip] {
+  position: relative;
+  cursor: pointer;
+}
+
+.hover-tip[data-tooltip]::after {
+  position: absolute;
+  z-index: 40;
+  bottom: calc(100% + 7px);
+  left: 0;
+  width: max-content;
+  max-width: min(240px, calc(100vw - 32px));
+  padding: 6px 8px;
+  border: 1px solid var(--foreground);
+  background: var(--background);
+  box-shadow: 3px 3px 0
+    color-mix(in srgb, var(--foreground) 14%, transparent);
+  color: var(--foreground);
+  content: attr(data-tooltip);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.4;
+  opacity: 0;
+  pointer-events: none;
+  text-align: left;
+  text-transform: none;
+  transform: translateY(3px);
+  transition:
+    opacity 80ms linear,
+    transform 80ms ease-out,
+    visibility 80ms linear;
+  visibility: hidden;
+  white-space: normal;
+}
+
+.hover-tip[data-tooltip]:hover::after,
+.hover-tip[data-tooltip]:focus-visible::after {
+  opacity: 1;
+  transform: translateY(0);
+  visibility: visible;
+}
+
+.hover-tip[data-tooltip]:focus-visible {
+  outline: 1px dotted var(--foreground);
+  outline-offset: 2px;
+}
+
+.header-tip::after {
+  top: calc(100% + 7px);
+  right: 0;
+  bottom: auto;
+  left: auto;
+}
+
+.daily-list li > .hover-tip:nth-child(n + 6)::after {
+  right: 0;
+  left: auto;
 }
 
 .table-note {
@@ -505,8 +570,8 @@ a {
 
   .daily-labels,
   .daily-list li {
-    grid-template-columns: 73px 28px 50px 50px 52px 1fr;
-    font-size: 11px;
+    grid-template-columns: 59px 20px 34px 34px 38px 38px 1fr;
+    font-size: 9px;
   }
 
   .forecast-labels,
