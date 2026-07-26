@@ -373,6 +373,60 @@ function observationPriority(observation: StationObservation) {
   );
 }
 
+function isPreferredObservation(
+  candidate: StationObservation,
+  existing: StationObservation | undefined,
+) {
+  if (!existing) return true;
+
+  const candidatePriority = observationPriority(candidate);
+  const existingPriority = observationPriority(existing);
+
+  return (
+    candidatePriority > existingPriority ||
+    (candidatePriority === existingPriority &&
+      new Date(candidate.timestamp).getTime() >
+        new Date(existing.timestamp).getTime())
+  );
+}
+
+function cumulativeObservedRainfall(
+  observations: StationObservation[],
+  timeZone: string,
+  now = new Date(),
+) {
+  const today = localDateKey(now, timeZone);
+  const observationsByHour = new Map<string, StationObservation>();
+
+  observations.forEach((observation) => {
+    const timestamp = new Date(observation.timestamp);
+    if (localDateKey(timestamp, timeZone) !== today) return;
+
+    // UTC hour keys preserve both occurrences of a repeated DST hour while
+    // still collapsing multiple station reports within the same hour.
+    const hourKey = timestamp.toISOString().slice(0, 13);
+    const existing = observationsByHour.get(hourKey);
+
+    if (isPreferredObservation(observation, existing)) {
+      observationsByHour.set(hourKey, observation);
+    }
+  });
+
+  let foundRainfallValue = false;
+  let total = 0;
+
+  observationsByHour.forEach((observation) => {
+    const rainfall = observationPrecipitationInches(observation);
+
+    if (rainfall !== null) {
+      foundRainfallValue = true;
+      total += rainfall;
+    }
+  });
+
+  return foundRainfallValue ? total : null;
+}
+
 async function getStationObservations(
   stationsUrl: string,
 ): Promise<{
@@ -608,13 +662,20 @@ type PrecipitationPeak = {
 function maximumPrecipitationChance(
   periods: HourlyPeriod[],
 ): PrecipitationPeak | null {
-  return periods.reduce<PrecipitationPeak | null>((highest, period) => {
-    const value = period.probabilityOfPrecipitation?.value ?? null;
+  return [...periods]
+    .sort(
+      (left, right) =>
+        new Date(left.startTime).getTime() -
+        new Date(right.startTime).getTime(),
+    )
+    .reduce<PrecipitationPeak | null>((highest, period) => {
+      const value = period.probabilityOfPrecipitation?.value ?? null;
 
-    if (value === null || (highest && value <= highest.value)) return highest;
+      // Keep the existing period on ties so the first chronological hour wins.
+      if (value === null || (highest && value <= highest.value)) return highest;
 
-    return { startTime: period.startTime, value };
-  }, null);
+      return { startTime: period.startTime, value };
+    }, null);
 }
 
 function formatRainTitle(
@@ -887,19 +948,12 @@ export default function WeatherClient() {
       const parts = zonedParts(timestamp, weather.timeZone);
       const hour = Number(parts.hour);
       const existing = observationsByHour.get(hour);
-      const isHigherPriority =
-        !existing ||
-        observationPriority(observation) > observationPriority(existing);
-      const isNewerAtSamePriority =
-        existing &&
-        observationPriority(observation) === observationPriority(existing) &&
-        timestamp.getTime() > new Date(existing.timestamp).getTime();
 
       if (
         localDateKey(timestamp, weather.timeZone) === today &&
         hour >= 5 &&
         hour <= 22 &&
-        (isHigherPriority || isNewerAtSamePriority)
+        isPreferredObservation(observation, existing)
       ) {
         observationsByHour.set(hour, observation);
       }
@@ -950,6 +1004,17 @@ export default function WeatherClient() {
     }));
   }, [weather]);
 
+  const todayRainfall = useMemo(
+    () =>
+      weather
+        ? cumulativeObservedRainfall(
+            weather.observations,
+            weather.timeZone,
+          )
+        : null,
+    [weather],
+  );
+
   const sevenDay = useMemo(() => {
     if (!weather) return [];
 
@@ -997,7 +1062,9 @@ export default function WeatherClient() {
           isDaytime: representative.isDaytime,
           isToday: dateKey === today,
           low: nighttime?.temperature ?? null,
-          rain: maximumPrecipitationChance([...hourlyPeriods, ...periods]),
+          rain: maximumPrecipitationChance(
+            hourlyPeriods.length ? hourlyPeriods : periods,
+          ),
           recordHigh: record?.high ?? null,
           recordLow: record?.low ?? null,
         };
@@ -1197,16 +1264,24 @@ export default function WeatherClient() {
             </div>
 
             <div className="current-facts">
-              <span>
-                <Droplets aria-hidden="true" size={14} />
-                humidity:{" "}
-                <strong>
-                  {weather.current.humidity === null
-                    ? "—"
-                    : `${Math.round(weather.current.humidity)}%`}
-                </strong>
-              </span>
-              <span>
+              <div className="current-fact-stack">
+                <span className="current-fact">
+                  <Droplets aria-hidden="true" size={14} />
+                  humidity:{" "}
+                  <strong>
+                    {weather.current.humidity === null
+                      ? "—"
+                      : `${Math.round(weather.current.humidity)}%`}
+                  </strong>
+                </span>
+                {todayRainfall !== null && todayRainfall > 0.1 ? (
+                  <span className="current-fact">
+                    <CloudRain aria-hidden="true" size={14} />
+                    rainfall: <strong>{todayRainfall.toFixed(2)} in.</strong>
+                  </span>
+                ) : null}
+              </div>
+              <span className="current-fact">
                 <Wind aria-hidden="true" size={14} />
                 wind:{" "}
                 <strong>{weather.hourly[0]?.windSpeed ?? "—"}</strong>

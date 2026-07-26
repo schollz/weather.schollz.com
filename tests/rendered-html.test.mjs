@@ -93,6 +93,14 @@ test("keeps NOAA requests and geolocation in the client app", async () => {
   assert.match(page, /isToday: dateKey === today/);
   assert.match(page, /className=\{forecast\.isToday \? "today" : undefined\}/);
   assert.match(page, /maximumPrecipitationChance/);
+  assert.match(page, /\[\.\.\.periods\]\s*\.sort/);
+  assert.match(
+    page,
+    /hourlyPeriods\.length \? hourlyPeriods : periods/,
+  );
+  assert.match(page, /cumulativeObservedRainfall/);
+  assert.match(page, /todayRainfall !== null && todayRainfall > 0\.1/);
+  assert.match(page, /rainfall: <strong>/);
   assert.match(page, /Highest rain chance:/);
   assert.match(
     page,

@@ -282,11 +282,16 @@ a {
 .current-facts {
   display: flex;
   gap: 22px;
-  align-items: center;
+  align-items: flex-start;
   flex-wrap: wrap;
 }
 
-.current-facts > span {
+.current-fact-stack {
+  display: grid;
+  gap: 2px;
+}
+
+.current-fact {
   display: inline-flex;
   gap: 6px;
   align-items: center;
