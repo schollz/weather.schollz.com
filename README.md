@@ -13,8 +13,10 @@ conditions, hourly details, and a seven-day forecast. Supported U.S. areas use
 NOAA forecasts and station observations plus ACIS daily temperature records.
 Everywhere else uses Open-Meteo forecasts and estimated ERA5-Land temperature
 records. Place search uses Open-Meteo, and raw coordinates are named through a
-cached OpenStreetMap Nominatim reverse lookup. Locations can be shared by URL,
-and no API keys or backend are required.
+cached OpenStreetMap Nominatim reverse lookup. Locations use readable,
+shareable URL slugs such as `/seattle/` and `/hillsboro-or/`; ambiguous U.S.
+city names include their state abbreviation. No API keys or backend are
+required.
 
 Open-Meteo past-hour values and international records are model-based estimates,
 not official station observations. The public endpoints used by this personal

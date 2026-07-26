@@ -26,6 +26,11 @@ import {
   useSyncExternalStore,
 } from "react";
 import {
+  locationSlugForPlace,
+  searchTermsForLocationSlug,
+  slugifyPlaceName,
+} from "./location-slugs.mjs";
+import {
   forecastPrecipitationForPeriod,
   formatForecastRainfall,
   formatObservedRainfall,
@@ -48,7 +53,7 @@ const OPEN_METEO_RECORD_CONCURRENCY = 4;
 const OPEN_METEO_RECORD_CACHE_KEY = "wx-open-meteo-records-v1";
 const REVERSE_GEOCODE_CACHE_KEY = "wx-reverse-geocode-v1";
 const REVERSE_GEOCODE_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const LOCATION_QUERY_KEY = "location";
+const LEGACY_LOCATION_QUERY_KEY = "location";
 const SEARCH_DEBOUNCE_MS = 350;
 const THEME_STORAGE_KEY = "wx-theme";
 const THEME_CHANGE_EVENT = "wx-theme-change";
@@ -72,6 +77,7 @@ type PlaceResult = {
   admin2?: string;
   country?: string;
   country_code: string;
+  feature_code?: string;
   id: number;
   latitude: number;
   longitude: number;
@@ -214,11 +220,11 @@ function saveTheme(theme: Theme) {
   window.dispatchEvent(new Event(THEME_CHANGE_EVENT));
 }
 
-function readSharedCoordinates() {
+function readLegacySharedCoordinates() {
   if (typeof window === "undefined") return null;
 
   const value = new URLSearchParams(window.location.search).get(
-    LOCATION_QUERY_KEY,
+    LEGACY_LOCATION_QUERY_KEY,
   );
 
   if (!value) return null;
@@ -239,13 +245,18 @@ function readSharedCoordinates() {
   return isValid ? { latitude, longitude } : null;
 }
 
-function updateSharedCoordinates(latitude: number, longitude: number) {
-  const url = new URL(window.location.href);
-  url.searchParams.set(
-    LOCATION_QUERY_KEY,
-    `${latitude.toFixed(4)},${longitude.toFixed(4)}`,
-  );
-  window.history.replaceState(window.history.state, "", url);
+function readSharedLocationSlug() {
+  if (typeof window === "undefined") return null;
+
+  const segments = window.location.pathname.split("/").filter(Boolean);
+  if (segments.length !== 1 || segments[0] === "404.html") return null;
+
+  try {
+    const slug = slugifyPlaceName(decodeURIComponent(segments[0]));
+    return slug || null;
+  } catch {
+    return null;
+  }
 }
 
 type NoaaValue = {
@@ -987,6 +998,135 @@ function locationHintFromPlace(place: PlaceResult): LocationHint {
     region: place.admin1 ?? place.admin2 ?? "",
     source: "open-meteo-geocoding",
   };
+}
+
+async function fetchPlaceResults(
+  query: string,
+  count: number,
+  signal?: AbortSignal,
+) {
+  const url = new URL(
+    "https://geocoding-api.open-meteo.com/v1/search",
+  );
+  url.searchParams.set("name", query);
+  url.searchParams.set("count", String(count));
+  url.searchParams.set("language", "en");
+  url.searchParams.set("format", "json");
+
+  const response = await fetch(url, { signal });
+
+  if (!response.ok) {
+    throw new Error(`Place search failed (${response.status})`);
+  }
+
+  const data = (await response.json()) as GeocodingResponse;
+  return data.results ?? [];
+}
+
+async function resolveLocationSlug(slug: string) {
+  for (const query of searchTermsForLocationSlug(slug)) {
+    const results = await fetchPlaceResults(query, 10);
+    const place = results.find(
+      (candidate) => locationSlugForPlace(candidate, results) === slug,
+    );
+
+    if (place) return place;
+  }
+
+  return null;
+}
+
+function coordinateDistance(
+  place: PlaceResult,
+  latitude: number,
+  longitude: number,
+) {
+  return (
+    (place.latitude - latitude) ** 2 +
+    (place.longitude - longitude) ** 2
+  );
+}
+
+async function canonicalLocationSlug(weather: WeatherData) {
+  if (weather.city === "Your location") return null;
+
+  const citySlug = slugifyPlaceName(weather.city);
+  if (!citySlug) return null;
+
+  try {
+    const results = await fetchPlaceResults(weather.city, 10);
+    const exactMatches = results.filter(
+      (place) => slugifyPlaceName(place.name) === citySlug,
+    );
+    const closest = exactMatches.sort(
+      (left, right) =>
+        coordinateDistance(
+          left,
+          weather.coordinates.latitude,
+          weather.coordinates.longitude,
+        ) -
+        coordinateDistance(
+          right,
+          weather.coordinates.latitude,
+          weather.coordinates.longitude,
+        ),
+    )[0];
+
+    return closest
+      ? locationSlugForPlace(closest, results)
+      : citySlug;
+  } catch {
+    return citySlug;
+  }
+}
+
+function updateMetadataElement(selector: string, content: string) {
+  const element = document.querySelector<HTMLMetaElement>(selector);
+  if (element) element.content = content;
+}
+
+function updateSharedLocation(weather: WeatherData, slug: string) {
+  const url = new URL(window.location.href);
+  url.pathname = `/${slug}/`;
+  url.searchParams.delete(LEGACY_LOCATION_QUERY_KEY);
+
+  window.history.replaceState(
+    {
+      ...(window.history.state && typeof window.history.state === "object"
+        ? window.history.state
+        : {}),
+      weatherLocation: {
+        coordinates: weather.coordinates,
+        locationHint: weather.locationHint,
+      },
+    },
+    "",
+    url,
+  );
+
+  const placeName = [weather.city, weather.state].filter(Boolean).join(", ");
+  const title = `${placeName} weather — weather.schollz.com`;
+  const description = `Current conditions, hourly weather, and a seven-day forecast for ${placeName}.`;
+  const canonicalUrl = new URL(`/${slug}/`, window.location.origin).href;
+  const canonical = document.querySelector<HTMLLinkElement>(
+    'link[rel="canonical"]',
+  );
+
+  document.title = title;
+  if (canonical) canonical.href = canonicalUrl;
+  updateMetadataElement('meta[name="description"]', description);
+  updateMetadataElement('meta[property="og:title"]', title);
+  updateMetadataElement('meta[property="og:description"]', description);
+  updateMetadataElement('meta[property="og:url"]', canonicalUrl);
+  updateMetadataElement('meta[name="twitter:title"]', title);
+  updateMetadataElement('meta[name="twitter:description"]', description);
+}
+
+function resetSharedLocation() {
+  const url = new URL(window.location.href);
+  url.pathname = "/";
+  url.searchParams.delete(LEGACY_LOCATION_QUERY_KEY);
+  window.history.replaceState(window.history.state, "", url);
 }
 
 function coordinateCacheKey(latitude: number, longitude: number) {
@@ -1749,22 +1889,7 @@ export default function WeatherClient() {
       setSearchError("");
 
       try {
-        const url = new URL(
-          "https://geocoding-api.open-meteo.com/v1/search",
-        );
-        url.searchParams.set("name", query);
-        url.searchParams.set("count", "6");
-        url.searchParams.set("language", "en");
-        url.searchParams.set("format", "json");
-
-        const response = await fetch(url, { signal });
-
-        if (!response.ok) {
-          throw new Error(`Place search failed (${response.status})`);
-        }
-
-        const data = (await response.json()) as GeocodingResponse;
-        const results = data.results ?? [];
+        const results = await fetchPlaceResults(query, 6, signal);
 
         setPlaceResults(results);
         setSearchError(results.length ? "" : "No places found.");
@@ -1799,6 +1924,7 @@ export default function WeatherClient() {
       latitude: number,
       longitude: number,
       locationHint: LocationHint | null = null,
+      preferredSlug: string | null = null,
     ) => {
       setPhase("loading");
       setError("");
@@ -1814,9 +1940,16 @@ export default function WeatherClient() {
           longitude,
           locationHint,
         );
-        updateSharedCoordinates(latitude, longitude);
         setWeather(result);
         setPhase("ready");
+
+        if (preferredSlug) {
+          updateSharedLocation(result, preferredSlug);
+        } else {
+          void canonicalLocationSlug(result).then((slug) => {
+            if (slug) updateSharedLocation(result, slug);
+          });
+        }
       } catch (weatherError) {
         setError(readableError(weatherError as Error));
         setPhase("error");
@@ -1877,7 +2010,9 @@ export default function WeatherClient() {
 
   useEffect(() => {
     const sharedCoordinates =
-      requestKey === 0 ? readSharedCoordinates() : null;
+      requestKey === 0 ? readLegacySharedCoordinates() : null;
+    const sharedSlug =
+      requestKey === 0 ? readSharedLocationSlug() : null;
 
     if (sharedCoordinates) {
       queueMicrotask(() => {
@@ -1885,6 +2020,34 @@ export default function WeatherClient() {
           sharedCoordinates.latitude,
           sharedCoordinates.longitude,
         );
+      });
+      return;
+    }
+
+    if (sharedSlug) {
+      queueMicrotask(() => {
+        setPhase("loading");
+        void resolveLocationSlug(sharedSlug)
+          .then((place) => {
+            if (!place) {
+              setError(
+                `The place link “${sharedSlug}” could not be found. Search for another place or use your current location.`,
+              );
+              setPhase("error");
+              return;
+            }
+
+            return loadCoordinates(
+              place.latitude,
+              place.longitude,
+              locationHintFromPlace(place),
+              sharedSlug,
+            );
+          })
+          .catch(() => {
+            setError("This place link could not be resolved. Please try again.");
+            setPhase("error");
+          });
       });
       return;
     }
@@ -2068,6 +2231,7 @@ export default function WeatherClient() {
   }, [climateRecordKey, climateRecords, weather]);
 
   const retryLocation = () => {
+    resetSharedLocation();
     setSearchOpen(false);
     setSearching(false);
     setPhase("locating");
@@ -2081,6 +2245,7 @@ export default function WeatherClient() {
   };
 
   const selectPlace = (place: PlaceResult) => {
+    const slug = locationSlugForPlace(place, placeResults);
     closePlaceSearch();
     setSearchQuery("");
     setPlaceResults([]);
@@ -2089,6 +2254,7 @@ export default function WeatherClient() {
       place.latitude,
       place.longitude,
       locationHintFromPlace(place),
+      slug,
     );
   };
 

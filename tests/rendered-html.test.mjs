@@ -30,7 +30,7 @@ test("server-renders the local worldwide weather app", async () => {
   );
   assert.match(
     html,
-    /<link href="favicon\.svg" rel="icon" type="image\/svg\+xml"/i,
+    /<link href="\/favicon\.svg" rel="icon" type="image\/svg\+xml"/i,
   );
   assert.match(
     html,
@@ -59,13 +59,17 @@ test("keeps worldwide weather requests and geolocation in the client app", async
     page,
     /maximumAge: requestKey === 0 \? 5 \* 60 \* 1000 : 0/,
   );
+  assert.match(page, /readSharedLocationSlug/);
+  assert.match(page, /LEGACY_LOCATION_QUERY_KEY = "location"/);
+  assert.match(page, /resolveLocationSlug/);
+  assert.match(page, /canonicalLocationSlug/);
+  assert.match(page, /locationSlugForPlace/);
+  assert.match(page, /url\.pathname = `\/\$\{slug\}\/`/);
+  assert.match(page, /window\.history\.replaceState/);
   assert.match(
     page,
-    /new URLSearchParams\(window\.location\.search\)\.get\(/,
+    /requestKey === 0 \? readLegacySharedCoordinates\(\) : null/,
   );
-  assert.match(page, /LOCATION_QUERY_KEY = "location"/);
-  assert.match(page, /window\.history\.replaceState/);
-  assert.match(page, /requestKey === 0 \? readSharedCoordinates\(\) : null/);
   assert.match(
     page,
     /https:\/\/geocoding-api\.open-meteo\.com\/v1\/search/,

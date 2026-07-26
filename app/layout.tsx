@@ -84,7 +84,7 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <link href="favicon.svg" rel="icon" type="image/svg+xml" />
+        <link href="/favicon.svg" rel="icon" type="image/svg+xml" />
         <script
           dangerouslySetInnerHTML={{
             __html:
