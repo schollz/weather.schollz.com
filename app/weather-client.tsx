@@ -29,13 +29,27 @@ import {
 const DISPLAY_HOURS = Array.from({ length: 18 }, (_, index) => index + 5);
 const SEATTLE = { latitude: 47.6062, longitude: -122.3321 };
 const ACIS_STATION_DATA_URL = "https://data.rcc-acis.org/StnData";
+const NOMINATIM_REVERSE_URL =
+  "https://nominatim.openstreetmap.org/reverse";
+const OPEN_METEO_ARCHIVE_URL =
+  "https://archive-api.open-meteo.com/v1/archive";
+const OPEN_METEO_FORECAST_URL =
+  "https://api.open-meteo.com/v1/forecast";
+const OPEN_METEO_RECORD_START_YEAR = 1950;
+const OPEN_METEO_RECORD_CONCURRENCY = 4;
+const OPEN_METEO_RECORD_CACHE_KEY = "wx-open-meteo-records-v1";
+const REVERSE_GEOCODE_CACHE_KEY = "wx-reverse-geocode-v1";
+const REVERSE_GEOCODE_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const LOCATION_QUERY_KEY = "location";
 const SEARCH_DEBOUNCE_MS = 350;
 const THEME_STORAGE_KEY = "wx-theme";
 const THEME_CHANGE_EVENT = "wx-theme-change";
+const NOAA_COUNTRY_CODES = new Set(["AS", "GU", "MP", "PR", "US", "VI"]);
 
 type LoadPhase = "locating" | "loading" | "ready" | "error";
 type Theme = "light" | "dark";
+type WeatherProvider = "noaa" | "open-meteo";
+type LocationSource = "open-meteo-geocoding" | "osm";
 
 type TooltipState = {
   horizontalOffset: number;
@@ -48,15 +62,25 @@ type TooltipState = {
 type PlaceResult = {
   admin1?: string;
   admin2?: string;
+  country?: string;
   country_code: string;
   id: number;
   latitude: number;
   longitude: number;
   name: string;
+  timezone?: string;
 };
 
 type GeocodingResponse = {
   results?: PlaceResult[];
+};
+
+type LocationHint = {
+  city: string;
+  country: string;
+  countryCode: string;
+  region: string;
+  source: LocationSource;
 };
 
 function getStoredTheme(): Theme {
@@ -231,7 +255,7 @@ type HourlyPeriod = {
   relativeHumidity?: NoaaValue;
   shortForecast: string;
   startTime: string;
-  temperature: number;
+  temperature: number | null;
   temperatureUnit: string;
   windDirection: string;
   windSpeed: string;
@@ -240,8 +264,10 @@ type HourlyPeriod = {
 type CurrentReading = {
   description: string;
   humidity: number | null;
+  sourceLabel: "model time" | "observed";
   temperatureF: number | null;
   timestamp: string | null;
+  windSpeed: string;
 };
 
 type WeatherData = {
@@ -249,15 +275,22 @@ type WeatherData = {
   coordinates: { latitude: number; longitude: number };
   current: CurrentReading;
   daily: HourlyPeriod[];
+  dataLabel: string;
+  dataUrl: string;
   hourly: HourlyPeriod[];
+  locationHint: LocationHint | null;
   observations: StationObservation[];
+  provider: WeatherProvider;
+  recordKey: string | null;
   state: string;
   stationId: string | null;
   timeZone: string;
 };
 
 type ClimateRecordValue = {
+  coverage?: string;
   date: string;
+  estimated?: boolean;
   temperatureF: number;
 };
 
@@ -300,6 +333,7 @@ type StationObservation = {
   precipitationLastHour: NoaaValue | null;
   rawMessage: string | null;
   relativeHumidity: NoaaValue;
+  source?: "estimated" | "observed";
   temperature: NoaaValue;
   textDescription: string;
   timestamp: string;
@@ -317,6 +351,97 @@ type ForecastResponse = {
   };
 };
 
+type OpenMeteoCurrent = {
+  is_day: number;
+  relative_humidity_2m: number | null;
+  temperature_2m: number | null;
+  time: number;
+  weather_code: number;
+  wind_direction_10m: number | null;
+  wind_speed_10m: number | null;
+};
+
+type OpenMeteoHourly = {
+  is_day: Array<number | null>;
+  precipitation: Array<number | null>;
+  precipitation_probability: Array<number | null>;
+  relative_humidity_2m: Array<number | null>;
+  temperature_2m: Array<number | null>;
+  time: number[];
+  weather_code: Array<number | null>;
+  wind_direction_10m: Array<number | null>;
+  wind_speed_10m: Array<number | null>;
+};
+
+type OpenMeteoDaily = {
+  precipitation_probability_max: Array<number | null>;
+  temperature_2m_max: Array<number | null>;
+  temperature_2m_min: Array<number | null>;
+  time: number[];
+  weather_code: Array<number | null>;
+};
+
+type OpenMeteoForecastResponse = {
+  current?: OpenMeteoCurrent;
+  daily?: OpenMeteoDaily;
+  hourly?: OpenMeteoHourly;
+  timezone?: string;
+};
+
+type OpenMeteoArchiveResponse = {
+  daily?: {
+    temperature_2m_max: Array<number | null>;
+    temperature_2m_min: Array<number | null>;
+    time: string[];
+  };
+  error?: boolean;
+  reason?: string;
+};
+
+type NominatimResponse = {
+  features?: Array<{
+    properties?: {
+      geocoding?: {
+        city?: string;
+        country?: string;
+        country_code?: string;
+        district?: string;
+        locality?: string;
+        municipality?: string;
+        name?: string;
+        state?: string;
+        town?: string;
+        village?: string;
+      };
+    };
+  }>;
+};
+
+type ReverseGeocodeCacheEntry = {
+  hint: LocationHint;
+  key: string;
+  updatedAt: number;
+};
+
+type OpenMeteoRecordCacheEntry = {
+  coverage: Record<string, number>;
+  key: string;
+  records: ClimateRecords;
+  updatedAt: number;
+};
+
+class WeatherRequestError extends Error {
+  provider: WeatherProvider;
+  status: number;
+
+  constructor(provider: WeatherProvider, status: number) {
+    super(`${provider === "noaa" ? "NOAA" : "Open-Meteo"} request failed (${status})`);
+    this.name = "WeatherRequestError";
+    this.provider = provider;
+    this.status = status;
+  }
+}
+
 const noaaHeaders = {
   Accept: "application/geo+json",
 };
@@ -325,7 +450,7 @@ async function fetchNoaaJson<T>(url: string): Promise<T> {
   const response = await fetch(url, { headers: noaaHeaders });
 
   if (!response.ok) {
-    throw new Error(`NOAA request failed (${response.status})`);
+    throw new WeatherRequestError("noaa", response.status);
   }
 
   return response.json() as Promise<T>;
@@ -341,10 +466,14 @@ function metersToInches(value: number | null) {
 
 function observationPrecipitationInches(observation: StationObservation) {
   const structuredValue = observation.precipitationLastHour?.value ?? null;
+  const structuredUnit =
+    observation.precipitationLastHour?.unitCode.toLowerCase() ?? "";
   const rawMessage = observation.rawMessage ?? "";
 
   if (structuredValue !== null) {
-    return metersToInches(structuredValue);
+    return structuredUnit.includes("in")
+      ? structuredValue
+      : metersToInches(structuredValue);
   }
 
   const metarAmount = rawMessage.match(/\bP(\d{4})\b/);
@@ -355,6 +484,15 @@ function observationPrecipitationInches(observation: StationObservation) {
 
   // Routine hourly METARs omit the P-group when no measurable rain fell.
   return rawMessage ? 0 : null;
+}
+
+function observationTemperatureFahrenheit(observation: StationObservation) {
+  const value = observation.temperature.value;
+  if (value === null) return null;
+
+  return observation.temperature.unitCode.toLowerCase().includes("degf")
+    ? value
+    : celsiusToFahrenheit(value);
 }
 
 function observationPriority(observation: StationObservation) {
@@ -462,6 +600,7 @@ async function getStationObservations(
 async function getNoaaWeather(
   latitude: number,
   longitude: number,
+  locationHint: LocationHint | null = null,
 ): Promise<WeatherData> {
   const point = await fetchNoaaJson<PointResponse>(
     `https://api.weather.gov/points/${latitude.toFixed(4)},${longitude.toFixed(4)}`,
@@ -477,7 +616,7 @@ async function getNoaaWeather(
   const observation = stationData.observations[0];
   const fallback = hourly[0];
   const temperatureF = observation?.temperature
-    ? celsiusToFahrenheit(observation.temperature.value)
+    ? observationTemperatureFahrenheit(observation)
     : (fallback?.temperature ?? null);
   const humidity =
     observation?.relativeHumidity.value ??
@@ -493,16 +632,468 @@ async function getNoaaWeather(
         fallback?.shortForecast ||
         "Conditions unavailable",
       humidity,
+      sourceLabel: "observed",
       temperatureF,
       timestamp: observation?.timestamp ?? fallback?.startTime ?? null,
+      windSpeed: fallback?.windSpeed ?? "—",
     },
     daily: dailyForecast.properties.periods,
+    dataLabel: "weather.gov",
+    dataUrl: "https://www.weather.gov/documentation/services-web-api",
     hourly,
+    locationHint,
     observations: stationData.observations,
+    provider: "noaa",
+    recordKey: stationData.stationId,
     state: point.properties.relativeLocation?.properties?.state ?? "",
     stationId: stationData.stationId,
     timeZone: point.properties.timeZone,
   };
+}
+
+function weatherCodeDescription(code: number | null | undefined) {
+  switch (code) {
+    case 0:
+      return "Clear sky";
+    case 1:
+      return "Mainly clear";
+    case 2:
+      return "Partly cloudy";
+    case 3:
+      return "Overcast";
+    case 45:
+      return "Fog";
+    case 48:
+      return "Rime fog";
+    case 51:
+      return "Light drizzle";
+    case 53:
+      return "Moderate drizzle";
+    case 55:
+      return "Dense drizzle";
+    case 56:
+      return "Light freezing drizzle";
+    case 57:
+      return "Dense freezing drizzle";
+    case 61:
+      return "Light rain";
+    case 63:
+      return "Moderate rain";
+    case 65:
+      return "Heavy rain";
+    case 66:
+      return "Light freezing rain";
+    case 67:
+      return "Heavy freezing rain";
+    case 71:
+      return "Light snow";
+    case 73:
+      return "Moderate snow";
+    case 75:
+      return "Heavy snow";
+    case 77:
+      return "Snow grains";
+    case 80:
+      return "Light rain showers";
+    case 81:
+      return "Moderate rain showers";
+    case 82:
+      return "Violent rain showers";
+    case 85:
+      return "Light snow showers";
+    case 86:
+      return "Heavy snow showers";
+    case 95:
+      return "Thunderstorms";
+    case 96:
+      return "Thunderstorms with light hail";
+    case 99:
+      return "Thunderstorms with heavy hail";
+    default:
+      return "Conditions unavailable";
+  }
+}
+
+function degreesToCompass(degrees: number | null | undefined) {
+  if (degrees === null || degrees === undefined) return "";
+
+  const directions = [
+    "N",
+    "NNE",
+    "NE",
+    "ENE",
+    "E",
+    "ESE",
+    "SE",
+    "SSE",
+    "S",
+    "SSW",
+    "SW",
+    "WSW",
+    "W",
+    "WNW",
+    "NW",
+    "NNW",
+  ];
+
+  return directions[Math.round(degrees / 22.5) % directions.length];
+}
+
+function formatWindSpeed(value: number | null | undefined) {
+  return value === null || value === undefined
+    ? "—"
+    : `${Math.round(value)} mph`;
+}
+
+function openMeteoTime(timestamp: number) {
+  return new Date(timestamp * 1000).toISOString();
+}
+
+async function fetchOpenMeteoJson<T>(url: string): Promise<T> {
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    throw new WeatherRequestError("open-meteo", response.status);
+  }
+
+  return response.json() as Promise<T>;
+}
+
+async function getOpenMeteoWeather(
+  latitude: number,
+  longitude: number,
+  locationHint: LocationHint | null,
+): Promise<WeatherData> {
+  const url = new URL(OPEN_METEO_FORECAST_URL);
+  url.searchParams.set("latitude", latitude.toFixed(4));
+  url.searchParams.set("longitude", longitude.toFixed(4));
+  url.searchParams.set(
+    "current",
+    [
+      "temperature_2m",
+      "relative_humidity_2m",
+      "is_day",
+      "weather_code",
+      "wind_speed_10m",
+      "wind_direction_10m",
+    ].join(","),
+  );
+  url.searchParams.set(
+    "hourly",
+    [
+      "temperature_2m",
+      "relative_humidity_2m",
+      "precipitation_probability",
+      "precipitation",
+      "weather_code",
+      "wind_speed_10m",
+      "wind_direction_10m",
+      "is_day",
+    ].join(","),
+  );
+  url.searchParams.set(
+    "daily",
+    [
+      "weather_code",
+      "temperature_2m_max",
+      "temperature_2m_min",
+      "precipitation_probability_max",
+    ].join(","),
+  );
+  url.searchParams.set("temperature_unit", "fahrenheit");
+  url.searchParams.set("wind_speed_unit", "mph");
+  url.searchParams.set("precipitation_unit", "inch");
+  url.searchParams.set("timezone", "auto");
+  url.searchParams.set("timeformat", "unixtime");
+  url.searchParams.set("forecast_days", "7");
+
+  const data = await fetchOpenMeteoJson<OpenMeteoForecastResponse>(
+    url.toString(),
+  );
+  const current = data.current;
+  const hourlyData = data.hourly;
+  const dailyData = data.daily;
+  const timeZone = data.timezone;
+
+  if (!current || !hourlyData || !dailyData || !timeZone) {
+    throw new Error("Open-Meteo returned an incomplete forecast.");
+  }
+
+  const hourly = hourlyData.time.map<HourlyPeriod>((timestamp, index) => ({
+    endTime: openMeteoTime(timestamp + 60 * 60),
+    icon: "",
+    isDaytime: hourlyData.is_day[index] === 1,
+    name: "",
+    number: index + 1,
+    probabilityOfPrecipitation: {
+      unitCode: "wmoUnit:percent",
+      value: hourlyData.precipitation_probability[index] ?? null,
+    },
+    relativeHumidity: {
+      unitCode: "wmoUnit:percent",
+      value: hourlyData.relative_humidity_2m[index] ?? null,
+    },
+    shortForecast: weatherCodeDescription(hourlyData.weather_code[index]),
+    startTime: openMeteoTime(timestamp),
+    temperature: hourlyData.temperature_2m[index] ?? null,
+    temperatureUnit: "F",
+    windDirection: degreesToCompass(hourlyData.wind_direction_10m[index]),
+    windSpeed: formatWindSpeed(hourlyData.wind_speed_10m[index]),
+  }));
+
+  const observations = hourlyData.time
+    .map<StationObservation | null>((timestamp, index) => {
+      if (timestamp > current.time) return null;
+
+      return {
+        icon: null,
+        precipitationLastHour: {
+          unitCode: "wmoUnit:in",
+          value: hourlyData.precipitation[index] ?? null,
+        },
+        rawMessage: null,
+        relativeHumidity: {
+          unitCode: "wmoUnit:percent",
+          value: hourlyData.relative_humidity_2m[index] ?? null,
+        },
+        source: "estimated",
+        temperature: {
+          unitCode: "wmoUnit:degF",
+          value: hourlyData.temperature_2m[index] ?? null,
+        },
+        textDescription: weatherCodeDescription(
+          hourlyData.weather_code[index],
+        ),
+        timestamp: openMeteoTime(timestamp),
+      };
+    })
+    .filter((observation): observation is StationObservation =>
+      Boolean(observation),
+    );
+
+  const daily = dailyData.time.flatMap<HourlyPeriod>((timestamp, index) => {
+    const description = weatherCodeDescription(dailyData.weather_code[index]);
+    const precipitationProbability =
+      dailyData.precipitation_probability_max[index] ?? null;
+    const base = timestamp * 1000;
+    const common = {
+      icon: "",
+      name: "",
+      probabilityOfPrecipitation: {
+        unitCode: "wmoUnit:percent",
+        value: precipitationProbability,
+      },
+      relativeHumidity: undefined,
+      shortForecast: description,
+      temperatureUnit: "F",
+      windDirection: "",
+      windSpeed: "",
+    };
+
+    return [
+      {
+        ...common,
+        endTime: new Date(base + 18 * 60 * 60 * 1000).toISOString(),
+        isDaytime: true,
+        number: index * 2 + 1,
+        startTime: new Date(base + 12 * 60 * 60 * 1000).toISOString(),
+        temperature: dailyData.temperature_2m_max[index] ?? null,
+      },
+      {
+        ...common,
+        endTime: new Date(base + 24 * 60 * 60 * 1000).toISOString(),
+        isDaytime: false,
+        number: index * 2 + 2,
+        startTime: new Date(base + 18 * 60 * 60 * 1000).toISOString(),
+        temperature: dailyData.temperature_2m_min[index] ?? null,
+      },
+    ];
+  });
+
+  const state = [locationHint?.region, locationHint?.country]
+    .filter((value, index, values) => value && values.indexOf(value) === index)
+    .join(", ");
+
+  return {
+    city: locationHint?.city || "Your location",
+    coordinates: { latitude, longitude },
+    current: {
+      description: weatherCodeDescription(current.weather_code),
+      humidity: current.relative_humidity_2m,
+      sourceLabel: "model time",
+      temperatureF: current.temperature_2m,
+      timestamp: openMeteoTime(current.time),
+      windSpeed: formatWindSpeed(current.wind_speed_10m),
+    },
+    daily,
+    dataLabel: "Open-Meteo",
+    dataUrl: "https://open-meteo.com/en/docs",
+    hourly,
+    locationHint,
+    observations,
+    provider: "open-meteo",
+    recordKey: `open-meteo:${latitude.toFixed(3)},${longitude.toFixed(3)}:${timeZone}`,
+    state,
+    stationId: null,
+    timeZone,
+  };
+}
+
+function locationHintFromPlace(place: PlaceResult): LocationHint {
+  return {
+    city: place.name,
+    country: place.country ?? place.country_code,
+    countryCode: place.country_code.toUpperCase(),
+    region: place.admin1 ?? place.admin2 ?? "",
+    source: "open-meteo-geocoding",
+  };
+}
+
+function coordinateCacheKey(latitude: number, longitude: number) {
+  return `${latitude.toFixed(3)},${longitude.toFixed(3)}`;
+}
+
+function readReverseGeocodeCache() {
+  if (typeof window === "undefined") return [] as ReverseGeocodeCacheEntry[];
+
+  try {
+    const value = JSON.parse(
+      window.localStorage.getItem(REVERSE_GEOCODE_CACHE_KEY) ?? "[]",
+    );
+    return Array.isArray(value) ? (value as ReverseGeocodeCacheEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeReverseGeocodeCache(entries: ReverseGeocodeCacheEntry[]) {
+  try {
+    window.localStorage.setItem(
+      REVERSE_GEOCODE_CACHE_KEY,
+      JSON.stringify(entries.slice(0, 25)),
+    );
+  } catch {
+    // Weather should continue even if storage is unavailable or full.
+  }
+}
+
+let reverseGeocodeQueue: Promise<void> = Promise.resolve();
+let lastReverseGeocodeRequest = 0;
+
+function queueReverseGeocode<T>(request: () => Promise<T>) {
+  const run = reverseGeocodeQueue.then(async () => {
+    const waitFor = Math.max(
+      0,
+      1000 - (Date.now() - lastReverseGeocodeRequest),
+    );
+
+    if (waitFor > 0) {
+      await new Promise((resolve) => window.setTimeout(resolve, waitFor));
+    }
+
+    lastReverseGeocodeRequest = Date.now();
+    return request();
+  });
+
+  reverseGeocodeQueue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+
+  return run;
+}
+
+async function reverseGeocodeCoordinates(
+  latitude: number,
+  longitude: number,
+): Promise<LocationHint | null> {
+  const key = coordinateCacheKey(latitude, longitude);
+  const cache = readReverseGeocodeCache();
+  const cached = cache.find(
+    (entry) =>
+      entry.key === key &&
+      Date.now() - entry.updatedAt < REVERSE_GEOCODE_CACHE_TTL_MS,
+  );
+
+  if (cached) return cached.hint;
+
+  return queueReverseGeocode(async () => {
+    const url = new URL(NOMINATIM_REVERSE_URL);
+    url.searchParams.set("lat", latitude.toFixed(4));
+    url.searchParams.set("lon", longitude.toFixed(4));
+    url.searchParams.set("format", "geocodejson");
+    url.searchParams.set("zoom", "10");
+    url.searchParams.set("addressdetails", "1");
+    url.searchParams.set("accept-language", "en");
+
+    const response = await fetch(url, {
+      referrerPolicy: "strict-origin-when-cross-origin",
+    });
+    if (!response.ok) return null;
+
+    const data = (await response.json()) as NominatimResponse;
+    const place = data.features?.[0]?.properties?.geocoding;
+    const countryCode = place?.country_code?.toUpperCase();
+
+    if (!place || !countryCode) return null;
+
+    const hint: LocationHint = {
+      city:
+        place.city ??
+        place.town ??
+        place.village ??
+        place.municipality ??
+        place.locality ??
+        place.district ??
+        place.name ??
+        "Your location",
+      country: place.country ?? countryCode,
+      countryCode,
+      region: place.state ?? place.district ?? "",
+      source: "osm",
+    };
+    const nextCache = [
+      { hint, key, updatedAt: Date.now() },
+      ...cache.filter((entry) => entry.key !== key),
+    ];
+    writeReverseGeocodeCache(nextCache);
+    return hint;
+  });
+}
+
+async function getWeatherForCoordinates(
+  latitude: number,
+  longitude: number,
+  locationHint: LocationHint | null = null,
+) {
+  let resolvedHint = locationHint;
+
+  if (!resolvedHint) {
+    try {
+      resolvedHint = await reverseGeocodeCoordinates(latitude, longitude);
+    } catch {
+      resolvedHint = null;
+    }
+  }
+
+  if (resolvedHint) {
+    return NOAA_COUNTRY_CODES.has(resolvedHint.countryCode)
+      ? getNoaaWeather(latitude, longitude, resolvedHint)
+      : getOpenMeteoWeather(latitude, longitude, resolvedHint);
+  }
+
+  try {
+    return await getNoaaWeather(latitude, longitude);
+  } catch (error) {
+    if (
+      error instanceof WeatherRequestError &&
+      error.provider === "noaa" &&
+      error.status === 404
+    ) {
+      return getOpenMeteoWeather(latitude, longitude, null);
+    }
+    throw error;
+  }
 }
 
 function addAcisSummaries(
@@ -583,6 +1174,319 @@ async function getAcisDailyRecords(
   };
 }
 
+function readOpenMeteoRecordCache() {
+  if (typeof window === "undefined") return [] as OpenMeteoRecordCacheEntry[];
+
+  try {
+    const value = JSON.parse(
+      window.localStorage.getItem(OPEN_METEO_RECORD_CACHE_KEY) ?? "[]",
+    );
+    return Array.isArray(value)
+      ? (value as OpenMeteoRecordCacheEntry[])
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeOpenMeteoRecordCache(entries: OpenMeteoRecordCacheEntry[]) {
+  try {
+    window.localStorage.setItem(
+      OPEN_METEO_RECORD_CACHE_KEY,
+      JSON.stringify(entries.slice(0, 12)),
+    );
+  } catch {
+    // Record estimates are optional if browser storage is unavailable.
+  }
+}
+
+function isValidUtcDate(year: number, month: number, day: number) {
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  );
+}
+
+function historicalWindowForYear(
+  targetDateKeys: string[],
+  baseYear: number,
+  lastCompletedYear: number,
+) {
+  let yearOffset = 0;
+  let previousMonth = Number(targetDateKeys[0]?.slice(5, 7));
+  const dates: string[] = [];
+
+  targetDateKeys.forEach((dateKey, index) => {
+    const month = Number(dateKey.slice(5, 7));
+    const day = Number(dateKey.slice(8, 10));
+
+    if (index > 0 && month < previousMonth) yearOffset += 1;
+    previousMonth = month;
+
+    const year = baseYear + yearOffset;
+    if (
+      year < OPEN_METEO_RECORD_START_YEAR ||
+      year > lastCompletedYear ||
+      !isValidUtcDate(year, month, day)
+    ) {
+      return;
+    }
+
+    dates.push(
+      `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
+    );
+  });
+
+  return dates.length
+    ? { endDate: dates[dates.length - 1], startDate: dates[0] }
+    : null;
+}
+
+async function fetchOpenMeteoRecordWindow(
+  latitude: number,
+  longitude: number,
+  timeZone: string,
+  startDate: string,
+  endDate: string,
+  signal: AbortSignal,
+) {
+  const url = new URL(OPEN_METEO_ARCHIVE_URL);
+  url.searchParams.set("latitude", latitude.toFixed(4));
+  url.searchParams.set("longitude", longitude.toFixed(4));
+  url.searchParams.set("start_date", startDate);
+  url.searchParams.set("end_date", endDate);
+  url.searchParams.set(
+    "daily",
+    "temperature_2m_max,temperature_2m_min",
+  );
+  url.searchParams.set("temperature_unit", "fahrenheit");
+  url.searchParams.set("timezone", timeZone);
+  url.searchParams.set("models", "era5_land");
+
+  const response = await fetch(url, { signal });
+  if (!response.ok) {
+    throw new WeatherRequestError("open-meteo", response.status);
+  }
+
+  const data = (await response.json()) as OpenMeteoArchiveResponse;
+  if (data.error || !data.daily) {
+    throw new Error(data.reason ?? "Open-Meteo archive data is unavailable.");
+  }
+
+  return data.daily;
+}
+
+async function mapWithConcurrency<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>,
+) {
+  let nextIndex = 0;
+  const workers = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        await worker(items[index]);
+      }
+    },
+  );
+
+  await Promise.all(workers);
+}
+
+function cloneClimateRecords(records: ClimateRecords) {
+  return Object.fromEntries(
+    Object.entries(records).map(([monthDay, record]) => [
+      monthDay,
+      {
+        high: record.high ? { ...record.high } : null,
+        low: record.low ? { ...record.low } : null,
+      },
+    ]),
+  ) as ClimateRecords;
+}
+
+function estimatedRecordsWithCoverage(
+  records: ClimateRecords,
+  monthDays: string[],
+  throughYear: number,
+) {
+  const coverage = `${OPEN_METEO_RECORD_START_YEAR}–${throughYear}`;
+  const result: ClimateRecords = {};
+
+  monthDays.forEach((monthDay) => {
+    const record = records[monthDay];
+    if (!record) return;
+
+    result[monthDay] = {
+      high: record.high
+        ? { ...record.high, coverage, estimated: true }
+        : null,
+      low: record.low
+        ? { ...record.low, coverage, estimated: true }
+        : null,
+    };
+  });
+
+  return result;
+}
+
+async function getOpenMeteoDailyRecords(
+  latitude: number,
+  longitude: number,
+  timeZone: string,
+  targetDateKeys: string[],
+  signal: AbortSignal,
+): Promise<{ records: ClimateRecords; throughYear: number }> {
+  const lastCompletedYear =
+    Number(zonedParts(new Date(), timeZone).year) - 1;
+  const targetMonthDays = [
+    ...new Set(targetDateKeys.map((dateKey) => dateKey.slice(5))),
+  ];
+  const cacheKey = `${coordinateCacheKey(latitude, longitude)}:${timeZone}`;
+  const cache = readOpenMeteoRecordCache();
+  const cached = cache.find((entry) => entry.key === cacheKey);
+  const cachedCoverage = cached?.coverage ?? {};
+  const existingRecords = cloneClimateRecords(cached?.records ?? {});
+  const minimumStartYear = Math.min(
+    ...targetMonthDays.map(
+      (monthDay) =>
+        Math.max(
+          cachedCoverage[monthDay] ?? OPEN_METEO_RECORD_START_YEAR - 1,
+          OPEN_METEO_RECORD_START_YEAR - 1,
+        ) + 1,
+    ),
+  );
+  const hasFreshCache = targetMonthDays.every(
+    (monthDay) => cachedCoverage[monthDay] >= lastCompletedYear,
+  );
+
+  if (hasFreshCache) {
+    return {
+      records: estimatedRecordsWithCoverage(
+        existingRecords,
+        targetMonthDays,
+        lastCompletedYear,
+      ),
+      throughYear: lastCompletedYear,
+    };
+  }
+
+  const crossesYear = targetDateKeys.some(
+    (dateKey, index) =>
+      index > 0 &&
+      Number(dateKey.slice(5, 7)) <
+        Number(targetDateKeys[index - 1].slice(5, 7)),
+  );
+  const firstBaseYear = Math.max(
+    OPEN_METEO_RECORD_START_YEAR - (crossesYear ? 1 : 0),
+    minimumStartYear - (crossesYear ? 1 : 0),
+  );
+  const windows = Array.from(
+    { length: Math.max(0, lastCompletedYear - firstBaseYear + 1) },
+    (_, index) =>
+      historicalWindowForYear(
+        targetDateKeys,
+        firstBaseYear + index,
+        lastCompletedYear,
+      ),
+  ).filter(
+    (
+      window,
+    ): window is {
+      endDate: string;
+      startDate: string;
+    } => Boolean(window),
+  );
+  const records = cloneClimateRecords(existingRecords);
+
+  try {
+    await mapWithConcurrency(
+      windows,
+      OPEN_METEO_RECORD_CONCURRENCY,
+      async ({ startDate, endDate }) => {
+        const daily = await fetchOpenMeteoRecordWindow(
+          latitude,
+          longitude,
+          timeZone,
+          startDate,
+          endDate,
+          signal,
+        );
+
+        daily.time.forEach((date, index) => {
+          const monthDay = date.slice(5);
+          if (!targetMonthDays.includes(monthDay)) return;
+
+          const high = daily.temperature_2m_max[index];
+          const low = daily.temperature_2m_min[index];
+          const record = records[monthDay] ?? { high: null, low: null };
+
+          if (
+            high !== null &&
+            (!record.high || high > record.high.temperatureF)
+          ) {
+            record.high = { date, temperatureF: high };
+          }
+          if (
+            low !== null &&
+            (!record.low || low < record.low.temperatureF)
+          ) {
+            record.low = { date, temperatureF: low };
+          }
+
+          records[monthDay] = record;
+        });
+      },
+    );
+  } catch (error) {
+    const cachedYears = targetMonthDays.map(
+      (monthDay) => cachedCoverage[monthDay] ?? 0,
+    );
+    const cachedThroughYear = Math.min(...cachedYears);
+
+    if (cached && cachedThroughYear >= OPEN_METEO_RECORD_START_YEAR) {
+      return {
+        records: estimatedRecordsWithCoverage(
+          existingRecords,
+          targetMonthDays,
+          cachedThroughYear,
+        ),
+        throughYear: cachedThroughYear,
+      };
+    }
+    throw error;
+  }
+
+  const nextCoverage = { ...cachedCoverage };
+  targetMonthDays.forEach((monthDay) => {
+    nextCoverage[monthDay] = lastCompletedYear;
+  });
+  const nextEntry: OpenMeteoRecordCacheEntry = {
+    coverage: nextCoverage,
+    key: cacheKey,
+    records,
+    updatedAt: Date.now(),
+  };
+  writeOpenMeteoRecordCache([
+    nextEntry,
+    ...cache.filter((entry) => entry.key !== cacheKey),
+  ]);
+
+  return {
+    records: estimatedRecordsWithCoverage(
+      records,
+      targetMonthDays,
+      lastCompletedYear,
+    ),
+    throughYear: lastCompletedYear,
+  };
+}
+
 function zonedParts(date: Date, timeZone: string) {
   const parts = new Intl.DateTimeFormat("en-CA", {
     day: "2-digit",
@@ -651,7 +1555,9 @@ function formatRecordTitle(
     year: "numeric",
   }).format(new Date(`${record.date}T00:00:00Z`));
 
-  return `Record ${kind}: ${Math.round(record.temperatureF)}°F on ${date}`;
+  return record.estimated
+    ? `Estimated record ${kind}: ${Math.round(record.temperatureF)}°F on ${date} (ERA5-Land, ${record.coverage})`
+    : `Record ${kind}: ${Math.round(record.temperatureF)}°F on ${date}`;
 }
 
 type PrecipitationPeak = {
@@ -693,9 +1599,13 @@ function formatRainTitle(
   return `Highest rain chance: ${Math.round(rain.value)}% at ${time}`;
 }
 
-function formatUpdated(timestamp: string | null, timeZone: string) {
+function formatUpdated(
+  timestamp: string | null,
+  timeZone: string,
+  sourceLabel: CurrentReading["sourceLabel"],
+) {
   if (!timestamp) return "update time unavailable";
-  return `observed ${new Intl.DateTimeFormat("en-US", {
+  return `${sourceLabel} ${new Intl.DateTimeFormat("en-US", {
     hour: "numeric",
     minute: "2-digit",
     timeZone,
@@ -754,9 +1664,11 @@ function readableError(error: GeolocationPositionError | Error) {
     return "Finding your location took too long.";
   }
 
-  return error.message.includes("404")
-    ? "NOAA forecasts are available for U.S. locations only."
-    : "NOAA weather data could not be reached. Please try again.";
+  if (error instanceof WeatherRequestError) {
+    return `${error.provider === "noaa" ? "NOAA" : "Open-Meteo"} weather data could not be reached. Please try again.`;
+  }
+
+  return "Weather data could not be reached. Please try again.";
 }
 
 export default function WeatherClient() {
@@ -770,8 +1682,12 @@ export default function WeatherClient() {
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState("");
   const [climateRecords, setClimateRecords] = useState<ClimateRecords>({});
-  const [climateRecordStationId, setClimateRecordStationId] = useState<
-    string | null
+  const [climateRecordKey, setClimateRecordKey] = useState<string | null>(null);
+  const [climateRecordSource, setClimateRecordSource] = useState<
+    "acis" | "open-meteo" | null
+  >(null);
+  const [climateRecordThroughYear, setClimateRecordThroughYear] = useState<
+    number | null
   >(null);
   const [climateStationName, setClimateStationName] = useState<string | null>(
     null,
@@ -800,7 +1716,6 @@ export default function WeatherClient() {
         url.searchParams.set("count", "6");
         url.searchParams.set("language", "en");
         url.searchParams.set("format", "json");
-        url.searchParams.set("countryCode", "US");
 
         const response = await fetch(url, { signal });
 
@@ -809,12 +1724,10 @@ export default function WeatherClient() {
         }
 
         const data = (await response.json()) as GeocodingResponse;
-        const results = (data.results ?? []).filter(
-          (place) => place.country_code === "US",
-        );
+        const results = data.results ?? [];
 
         setPlaceResults(results);
-        setSearchError(results.length ? "" : "No U.S. places found.");
+        setSearchError(results.length ? "" : "No places found.");
       } catch {
         if (signal.aborted) return;
         setPlaceResults([]);
@@ -842,12 +1755,25 @@ export default function WeatherClient() {
   }, [searchOpen, searchPlaces, searchQuery]);
 
   const loadCoordinates = useCallback(
-    async (latitude: number, longitude: number) => {
+    async (
+      latitude: number,
+      longitude: number,
+      locationHint: LocationHint | null = null,
+    ) => {
       setPhase("loading");
       setError("");
+      setClimateRecords({});
+      setClimateRecordKey(null);
+      setClimateRecordSource(null);
+      setClimateRecordThroughYear(null);
+      setClimateStationName(null);
 
       try {
-        const result = await getNoaaWeather(latitude, longitude);
+        const result = await getWeatherForCoordinates(
+          latitude,
+          longitude,
+          locationHint,
+        );
         updateSharedCoordinates(latitude, longitude);
         setWeather(result);
         setPhase("ready");
@@ -859,29 +1785,55 @@ export default function WeatherClient() {
     [],
   );
 
-  const stationId = weather?.stationId ?? null;
-
   useEffect(() => {
-    if (!stationId) return;
-
     const controller = new AbortController();
 
-    void getAcisDailyRecords(stationId, controller.signal)
-      .then(({ records, stationName }) => {
-        if (controller.signal.aborted) return;
-        setClimateRecords(records);
-        setClimateRecordStationId(stationId);
-        setClimateStationName(stationName);
-      })
-      .catch(() => {
-        if (controller.signal.aborted) return;
-        setClimateRecords({});
-        setClimateRecordStationId(null);
-        setClimateStationName(null);
-      });
+    if (!weather?.recordKey) return () => controller.abort();
+
+    if (weather.provider === "noaa" && weather.stationId) {
+      void getAcisDailyRecords(weather.stationId, controller.signal)
+        .then(({ records, stationName }) => {
+          if (controller.signal.aborted) return;
+          setClimateRecords(records);
+          setClimateRecordKey(weather.recordKey);
+          setClimateRecordSource("acis");
+          setClimateStationName(stationName);
+        })
+        .catch(() => {
+          if (controller.signal.aborted) return;
+          setClimateRecords({});
+        });
+    } else if (weather.provider === "open-meteo") {
+      const targetDateKeys = [
+        ...new Set(
+          weather.daily.map((period) =>
+            localDateKey(new Date(period.startTime), weather.timeZone),
+          ),
+        ),
+      ].slice(0, 7);
+
+      void getOpenMeteoDailyRecords(
+        weather.coordinates.latitude,
+        weather.coordinates.longitude,
+        weather.timeZone,
+        targetDateKeys,
+        controller.signal,
+      )
+        .then(({ records, throughYear }) => {
+          if (controller.signal.aborted) return;
+          setClimateRecords(records);
+          setClimateRecordKey(weather.recordKey);
+          setClimateRecordSource("open-meteo");
+          setClimateRecordThroughYear(throughYear);
+        })
+        .catch(() => {
+          if (controller.signal.aborted) return;
+          setClimateRecords({});
+        });
+    }
 
     return () => controller.abort();
-  }, [stationId, weather]);
+  }, [weather]);
 
   useEffect(() => {
     const sharedCoordinates =
@@ -977,10 +1929,9 @@ export default function WeatherClient() {
                   precipitation === null
                     ? "—"
                     : `${precipitation.toFixed(2)} in.`,
-                source: "observed" as const,
-                temperatureF: celsiusToFahrenheit(
-                  observation.temperature.value,
-                ),
+                source: observation.source ?? ("observed" as const),
+                temperatureF:
+                  observationTemperatureFahrenheit(observation),
               };
             })()
           : hourlyByHour.has(hour)
@@ -1048,7 +1999,7 @@ export default function WeatherClient() {
         const representative = daytime ?? nighttime ?? periods[0];
         const hourlyPeriods = hourlyByDate.get(dateKey) ?? [];
         const record =
-          climateRecordStationId === stationId
+          climateRecordKey === weather.recordKey
             ? climateRecords[dateKey.slice(5)]
             : undefined;
 
@@ -1069,7 +2020,7 @@ export default function WeatherClient() {
           recordLow: record?.low ?? null,
         };
       });
-  }, [climateRecordStationId, climateRecords, stationId, weather]);
+  }, [climateRecordKey, climateRecords, weather]);
 
   const retryLocation = () => {
     setSearchOpen(false);
@@ -1089,7 +2040,11 @@ export default function WeatherClient() {
     setSearchQuery("");
     setPlaceResults([]);
     setSearchError("");
-    void loadCoordinates(place.latitude, place.longitude);
+    void loadCoordinates(
+      place.latitude,
+      place.longitude,
+      locationHintFromPlace(place),
+    );
   };
 
   return (
@@ -1111,11 +2066,11 @@ export default function WeatherClient() {
               aria-controls="place-search"
               aria-expanded={searchOpen}
               aria-label={
-                searchOpen ? "Close place search" : "Search U.S. places"
+                searchOpen ? "Close place search" : "Search worldwide places"
               }
               className="icon-button hover-tip header-tip"
               data-tooltip={
-                searchOpen ? "Close place search" : "Search U.S. places"
+                searchOpen ? "Close place search" : "Search worldwide places"
               }
               onClick={() => {
                 if (searchOpen) closePlaceSearch();
@@ -1152,7 +2107,7 @@ export default function WeatherClient() {
 
         {searchOpen ? (
           <div
-            aria-label="Search U.S. places"
+            aria-label="Search worldwide places"
             className="place-search"
             id="place-search"
             onKeyDown={(event) => {
@@ -1161,7 +2116,7 @@ export default function WeatherClient() {
             role="dialog"
           >
             <div className="search-heading">
-              <span>search U.S. weather</span>
+              <span>search worldwide weather</span>
               <button
                 aria-label="Close place search"
                 className="search-close"
@@ -1174,7 +2129,7 @@ export default function WeatherClient() {
 
             <form onSubmit={(event) => event.preventDefault()}>
               <label className="sr-only" htmlFor="place-query">
-                City or ZIP code
+                City or postal code
               </label>
               <div className="search-input-row">
                 <Search aria-hidden="true" size={14} />
@@ -1188,7 +2143,7 @@ export default function WeatherClient() {
                     setSearchError("");
                     setSearching(false);
                   }}
-                  placeholder="City or ZIP code"
+                  placeholder="City or postal code"
                   type="search"
                   value={searchQuery}
                 />
@@ -1201,7 +2156,7 @@ export default function WeatherClient() {
                   ? "Searching..."
                   : searchQuery.trim().length === 1
                     ? "Enter at least two characters."
-                    : "U.S. locations only")}
+                    : "Worldwide locations")}
             </p>
 
             {placeResults.length ? (
@@ -1215,7 +2170,7 @@ export default function WeatherClient() {
                     >
                       <strong>{place.name}</strong>
                       <span>
-                        {[place.admin2, place.admin1]
+                        {[place.admin2, place.admin1, place.country]
                           .filter(Boolean)
                           .join(", ")}
                       </span>
@@ -1239,7 +2194,11 @@ export default function WeatherClient() {
             </h1>
             <p className="meta-line">
               {formatDate(weather.timeZone)} /{" "}
-              {formatUpdated(weather.current.timestamp, weather.timeZone)}
+              {formatUpdated(
+                weather.current.timestamp,
+                weather.timeZone,
+                weather.current.sourceLabel,
+              )}
             </p>
 
             <div className="text-rule" aria-hidden="true" />
@@ -1284,7 +2243,7 @@ export default function WeatherClient() {
               <span className="current-fact">
                 <Wind aria-hidden="true" size={14} />
                 wind:{" "}
-                <strong>{weather.hourly[0]?.windSpeed ?? "—"}</strong>
+                <strong>{weather.current.windSpeed}</strong>
               </span>
             </div>
           </section>
@@ -1354,8 +2313,19 @@ export default function WeatherClient() {
             </ol>
 
             <p className="table-note">
-              * past = observed 1h rainfall (in.) / future = precipitation
-              chance. Earlier hours use station {weather.stationId ?? "data"}.
+              {weather.provider === "noaa" ? (
+                <>
+                  * past = observed 1h rainfall (in.) / future = precipitation
+                  chance. Earlier hours use station{" "}
+                  {weather.stationId ?? "data"}.
+                </>
+              ) : (
+                <>
+                  * past = estimated 1h precipitation (in.) / future =
+                  precipitation chance. Earlier hours use Open-Meteo model
+                  data.
+                </>
+              )}
             </p>
           </section>
 
@@ -1460,15 +2430,28 @@ export default function WeatherClient() {
             <p>
               location: {weather.coordinates.latitude.toFixed(3)},{" "}
               {weather.coordinates.longitude.toFixed(3)}
+              {weather.locationHint?.source === "osm" ? (
+                <>
+                  {" "}
+                  /{" "}
+                  <a
+                    href="https://www.openstreetmap.org/copyright"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    © OpenStreetMap contributors
+                  </a>
+                </>
+              ) : null}
             </p>
             <p>
               data:{" "}
               <a
-                href="https://www.weather.gov/documentation/services-web-api"
+                href={weather.dataUrl}
                 target="_blank"
                 rel="noreferrer"
               >
-                weather.gov
+                {weather.dataLabel}
               </a>
             </p>
             {weather.stationId ? (
@@ -1483,16 +2466,22 @@ export default function WeatherClient() {
                 </a>
               </p>
             ) : null}
-            {climateRecordStationId === stationId &&
+            {climateRecordKey === weather.recordKey &&
             Object.keys(climateRecords).length ? (
               <p>
                 records:{" "}
                 <a
-                  href="https://builder.rcc-acis.org/"
+                  href={
+                    climateRecordSource === "open-meteo"
+                      ? "https://open-meteo.com/en/docs/historical-weather-api"
+                      : "https://builder.rcc-acis.org/"
+                  }
                   target="_blank"
                   rel="noreferrer"
                 >
-                  ACIS / {climateStationName ?? stationId}
+                  {climateRecordSource === "open-meteo"
+                    ? `Open-Meteo ERA5-Land (estimated, ${OPEN_METEO_RECORD_START_YEAR}–${climateRecordThroughYear})`
+                    : `ACIS / ${climateStationName ?? weather.stationId}`}
                 </a>
               </p>
             ) : null}
@@ -1502,6 +2491,7 @@ export default function WeatherClient() {
                 loadCoordinates(
                   weather.coordinates.latitude,
                   weather.coordinates.longitude,
+                  weather.locationHint,
                 )
               }
               type="button"
@@ -1524,8 +2514,9 @@ export default function WeatherClient() {
               <p className="status-code">&gt; location / data error</p>
               <h1>{error}</h1>
               <p>
-                Your coordinates go directly from this browser to NOAA and are
-                not stored by this site.
+                This site has no server. Weather and place requests go directly
+                from your browser to the listed providers; repeat lookups may
+                be cached in your browser.
               </p>
               <div className="status-actions">
                 <button
@@ -1549,7 +2540,10 @@ export default function WeatherClient() {
           ) : (
             <>
               <p className="status-code">
-                &gt; {phase === "locating" ? "locating" : "contacting noaa"}
+                &gt;{" "}
+                {phase === "locating"
+                  ? "locating"
+                  : "contacting weather services"}
                 <span className="loading-dots" aria-hidden="true">
                   ...
                 </span>
@@ -1560,7 +2554,8 @@ export default function WeatherClient() {
                   : "Reading the latest forecast."}
               </h1>
               <p>
-                Allow location access when prompted. NOAA covers U.S. locations.
+                Allow location access when prompted. NOAA serves supported U.S.
+                areas; Open-Meteo supplies worldwide coverage.
               </p>
             </>
           )}
