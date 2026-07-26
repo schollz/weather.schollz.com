@@ -1,0 +1,223 @@
+/**
+ * @typedef {{
+ *   endTime: string;
+ *   forecastPrecipitationInches?: number | null;
+ *   startTime: string;
+ * }} ForecastPrecipitationPeriod
+ */
+
+/**
+ * @typedef {{
+ *   endTime: number;
+ *   startTime: number;
+ *   totalInches: number;
+ * }} PrecipitationInterval
+ */
+
+/**
+ * @typedef {{
+ *   uom: string;
+ *   values: Array<{ validTime: string; value: number | null }>;
+ * }} NoaaQuantitativePrecipitation
+ */
+
+function durationMilliseconds(duration) {
+  const match =
+    /^P(?:(\d+(?:\.\d+)?)D)?(?:T(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?)?$/.exec(
+      duration,
+    );
+
+  if (!match) return null;
+
+  const days = Number(match[1] ?? 0);
+  const hours = Number(match[2] ?? 0);
+  const minutes = Number(match[3] ?? 0);
+  const seconds = Number(match[4] ?? 0);
+  const milliseconds =
+    ((days * 24 + hours) * 60 * 60 + minutes * 60 + seconds) * 1000;
+
+  return milliseconds > 0 ? milliseconds : null;
+}
+
+function precipitationInches(value, unitCode) {
+  if (!Number.isFinite(value)) return null;
+
+  const unit = unitCode.toLowerCase();
+
+  if (unit.endsWith(":mm") || unit === "mm") return value / 25.4;
+  if (unit.endsWith(":cm") || unit === "cm") return value / 2.54;
+  if (unit.endsWith(":m") || unit === "m") return value * 39.3700787402;
+  if (unit.endsWith(":in") || unit === "in") return value;
+
+  return null;
+}
+
+/**
+ * Convert NOAA quantitative precipitation values into timed inch totals.
+ *
+ * @param {NoaaQuantitativePrecipitation | null | undefined} precipitation
+ * @returns {PrecipitationInterval[]}
+ */
+export function normalizeNoaaPrecipitation(precipitation) {
+  if (!precipitation) return [];
+
+  return precipitation.values.flatMap((entry) => {
+    if (entry.value === null || entry.value < 0) return [];
+
+    const [startValue, durationValue] = entry.validTime.split("/");
+    const startTime = new Date(startValue).getTime();
+    const duration = durationMilliseconds(durationValue ?? "");
+    const totalInches = precipitationInches(entry.value, precipitation.uom);
+
+    if (
+      !Number.isFinite(startTime) ||
+      duration === null ||
+      totalInches === null
+    ) {
+      return [];
+    }
+
+    return [
+      {
+        endTime: startTime + duration,
+        startTime,
+        totalInches,
+      },
+    ];
+  });
+}
+
+/**
+ * Allocate interval totals proportionally to a forecast period.
+ *
+ * @param {PrecipitationInterval[]} intervals
+ * @param {string} startValue
+ * @param {string} endValue
+ * @returns {number | null}
+ */
+export function forecastPrecipitationForPeriod(
+  intervals,
+  startValue,
+  endValue,
+) {
+  const startTime = new Date(startValue).getTime();
+  const endTime = new Date(endValue).getTime();
+
+  if (
+    !Number.isFinite(startTime) ||
+    !Number.isFinite(endTime) ||
+    endTime <= startTime
+  ) {
+    return null;
+  }
+
+  let foundInterval = false;
+  let total = 0;
+
+  intervals.forEach((interval) => {
+    const overlapStart = Math.max(startTime, interval.startTime);
+    const overlapEnd = Math.min(endTime, interval.endTime);
+    const overlap = overlapEnd - overlapStart;
+
+    if (overlap <= 0) return;
+
+    foundInterval = true;
+    total +=
+      interval.totalInches *
+      (overlap / (interval.endTime - interval.startTime));
+  });
+
+  return foundInterval ? total : null;
+}
+
+function localDateKey(date, timeZone) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    day: "2-digit",
+    month: "2-digit",
+    timeZone,
+    year: "numeric",
+  }).formatToParts(date);
+  const values = Object.fromEntries(
+    parts.map(({ type, value }) => [type, value]),
+  );
+
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+/**
+ * Sum forecast periods after the current hour through local midnight.
+ *
+ * @param {ForecastPrecipitationPeriod[]} periods
+ * @param {string} timeZone
+ * @param {Date} [now]
+ * @returns {number | null}
+ */
+export function remainingRainfallTotal(
+  periods,
+  timeZone,
+  now = new Date(),
+) {
+  const today = localDateKey(now, timeZone);
+  const nowTime = now.getTime();
+  let foundValue = false;
+  let total = 0;
+
+  periods.forEach((period) => {
+    const start = new Date(period.startTime);
+    const amount = period.forecastPrecipitationInches;
+
+    if (
+      start.getTime() <= nowTime ||
+      localDateKey(start, timeZone) !== today ||
+      amount === null ||
+      amount === undefined ||
+      !Number.isFinite(amount)
+    ) {
+      return;
+    }
+
+    foundValue = true;
+    total += Math.max(0, amount);
+  });
+
+  return foundValue ? total : null;
+}
+
+/**
+ * @param {number} value
+ */
+export function formatRainfallInches(value) {
+  return value > 0 && value < 0.01
+    ? "<0.01 in."
+    : `${value.toFixed(2)} in.`;
+}
+
+/**
+ * @param {number | null} amount
+ */
+export function formatObservedRainfall(amount) {
+  return amount === null || !Number.isFinite(amount) || amount <= 0
+    ? "—"
+    : formatRainfallInches(amount);
+}
+
+/**
+ * @param {number | null} probability
+ * @param {number | null} amount
+ */
+export function formatForecastRainfall(probability, amount) {
+  const probabilityText =
+    probability === null || !Number.isFinite(probability)
+      ? null
+      : `${Math.round(probability)}%`;
+  const amountText =
+    amount !== null && Number.isFinite(amount) && amount > 0
+      ? formatRainfallInches(amount)
+      : null;
+
+  if (probabilityText && amountText) {
+    return `${probabilityText} (${amountText})`;
+  }
+
+  return probabilityText ?? amountText ?? "—";
+}

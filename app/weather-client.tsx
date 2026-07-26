@@ -25,6 +25,14 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import {
+  forecastPrecipitationForPeriod,
+  formatForecastRainfall,
+  formatObservedRainfall,
+  formatRainfallInches,
+  normalizeNoaaPrecipitation,
+  remainingRainfallTotal,
+} from "./precipitation.mjs";
 
 const DISPLAY_HOURS = Array.from({ length: 18 }, (_, index) => index + 5);
 const SEATTLE = { latitude: 47.6062, longitude: -122.3321 };
@@ -247,6 +255,7 @@ type NoaaValue = {
 
 type HourlyPeriod = {
   endTime: string;
+  forecastPrecipitationInches?: number | null;
   icon: string;
   isDaytime: boolean;
   name: string;
@@ -312,6 +321,7 @@ type AcisResponse = {
 type PointResponse = {
   properties: {
     forecast: string;
+    forecastGridData: string;
     forecastHourly: string;
     observationStations: string;
     relativeLocation?: {
@@ -348,6 +358,18 @@ type StationObservationsResponse = {
 type ForecastResponse = {
   properties: {
     periods: HourlyPeriod[];
+  };
+};
+
+type NoaaGridForecastResponse = {
+  properties: {
+    quantitativePrecipitation?: {
+      uom: string;
+      values: Array<{
+        validTime: string;
+        value: number | null;
+      }>;
+    };
   };
 };
 
@@ -606,13 +628,29 @@ async function getNoaaWeather(
     `https://api.weather.gov/points/${latitude.toFixed(4)},${longitude.toFixed(4)}`,
   );
 
-  const [hourlyForecast, dailyForecast, stationData] = await Promise.all([
-    fetchNoaaJson<ForecastResponse>(point.properties.forecastHourly),
-    fetchNoaaJson<ForecastResponse>(point.properties.forecast),
-    getStationObservations(point.properties.observationStations),
-  ]);
+  const [hourlyForecast, dailyForecast, stationData, gridForecast] =
+    await Promise.all([
+      fetchNoaaJson<ForecastResponse>(point.properties.forecastHourly),
+      fetchNoaaJson<ForecastResponse>(point.properties.forecast),
+      getStationObservations(point.properties.observationStations),
+      point.properties.forecastGridData
+        ? fetchNoaaJson<NoaaGridForecastResponse>(
+            point.properties.forecastGridData,
+          ).catch(() => null)
+        : Promise.resolve(null),
+    ]);
 
-  const hourly = hourlyForecast.properties.periods;
+  const precipitationIntervals = normalizeNoaaPrecipitation(
+    gridForecast?.properties.quantitativePrecipitation,
+  );
+  const hourly = hourlyForecast.properties.periods.map((period) => ({
+    ...period,
+    forecastPrecipitationInches: forecastPrecipitationForPeriod(
+      precipitationIntervals,
+      period.startTime,
+      period.endTime,
+    ),
+  }));
   const observation = stationData.observations[0];
   const fallback = hourly[0];
   const temperatureF = observation?.temperature
@@ -821,6 +859,8 @@ async function getOpenMeteoWeather(
 
   const hourly = hourlyData.time.map<HourlyPeriod>((timestamp, index) => ({
     endTime: openMeteoTime(timestamp + 60 * 60),
+    forecastPrecipitationInches:
+      hourlyData.precipitation[index] ?? null,
     icon: "",
     isDaytime: hourlyData.is_day[index] === 1,
     name: "",
@@ -1925,10 +1965,7 @@ export default function WeatherClient() {
                   observation.textDescription || "Observed conditions",
                 humidity: observation.relativeHumidity.value,
                 isDaytime: hour >= 6 && hour < 20,
-                rain:
-                  precipitation === null
-                    ? "—"
-                    : `${precipitation.toFixed(2)} in.`,
+                rain: formatObservedRainfall(precipitation),
                 source: observation.source ?? ("observed" as const),
                 temperatureF:
                   observationTemperatureFahrenheit(observation),
@@ -1937,16 +1974,16 @@ export default function WeatherClient() {
           : hourlyByHour.has(hour)
             ? (() => {
                 const period = hourlyByHour.get(hour)!;
-                const precipitation =
+                const precipitationProbability =
                   period.probabilityOfPrecipitation?.value ?? null;
                 return {
                   description: period.shortForecast,
                   humidity: period.relativeHumidity?.value ?? null,
                   isDaytime: period.isDaytime,
-                  rain:
-                    precipitation === null
-                      ? "—"
-                      : `${Math.round(precipitation)}%`,
+                  rain: formatForecastRainfall(
+                    precipitationProbability,
+                    period.forecastPrecipitationInches ?? null,
+                  ),
                   source: "forecast" as const,
                   temperatureF: period.temperature,
                 };
@@ -1962,6 +1999,14 @@ export default function WeatherClient() {
             weather.observations,
             weather.timeZone,
           )
+        : null,
+    [weather],
+  );
+
+  const rainfallForecast = useMemo(
+    () =>
+      weather
+        ? remainingRainfallTotal(weather.hourly, weather.timeZone)
         : null,
     [weather],
   );
@@ -2245,6 +2290,13 @@ export default function WeatherClient() {
                 wind:{" "}
                 <strong>{weather.current.windSpeed}</strong>
               </span>
+              {rainfallForecast !== null && rainfallForecast > 0 ? (
+                <span className="current-fact rainfall-forecast">
+                  <CloudRain aria-hidden="true" size={14} />
+                  rainfall forecast:{" "}
+                  <strong>{formatRainfallInches(rainfallForecast)}</strong>
+                </span>
+              ) : null}
             </div>
           </section>
 
