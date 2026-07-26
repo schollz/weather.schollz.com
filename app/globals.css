@@ -297,6 +297,10 @@ a {
   align-items: center;
 }
 
+.rainfall-forecast {
+  width: 100%;
+}
+
 .current-facts strong {
   font-weight: 800;
 }

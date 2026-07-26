@@ -99,6 +99,8 @@ test("keeps worldwide weather requests and geolocation in the client app", async
     /fetchNoaaJson<ForecastResponse>\(point\.properties\.forecast\)/,
   );
   assert.match(page, /forecastHourly/);
+  assert.match(page, /forecastGridData/);
+  assert.match(page, /quantitativePrecipitation/);
   assert.match(page, /temperature_2m/);
   assert.match(page, /relative_humidity_2m/);
   assert.match(page, /precipitation_probability/);
@@ -151,6 +153,13 @@ test("keeps worldwide weather requests and geolocation in the client app", async
   assert.match(page, /stationUrl}\/observations/);
   assert.match(page, /probabilityOfPrecipitation/);
   assert.match(page, /precipitationLastHour/);
+  assert.match(
+    page,
+    /forecastPrecipitationInches:\s+hourlyData\.precipitation\[index\]/,
+  );
+  assert.match(page, /rainfall forecast:/);
+  assert.match(page, /formatForecastRainfall/);
+  assert.match(page, /remainingRainfallTotal/);
   assert.match(page, /rawMessage\.match\(\/\\bP\(\\d\{4\}\)\\b\//);
   assert.match(page, /relativeHumidity/);
   assert.match(page, /DISPLAY_HOURS/);
