@@ -104,13 +104,16 @@ test("keeps worldwide weather requests and geolocation in the client app", async
     /\.filter\(\s*\(place\) => place\.country_code === "US"/,
   );
   assert.match(page, /Search worldwide places/);
-  assert.match(page, /Worldwide locations/);
+  assert.match(page, /searchNominatimPlaces\(query, 6\)/);
+  assert.match(page, /url\.searchParams\.set\("featureType", "settlement"\)/);
+  assert.match(page, /PLACE_SEARCH_CACHE_TTL_MS/);
+  assert.match(page, /OpenStreetMap contributors/);
+  assert.match(page, /placeholder="Portland, Oregon"/);
   assert.match(page, /\[place\.admin2, place\.admin1, place\.country\]/);
   assert.match(page, /aria-label="Use current location"/);
   assert.match(page, /event\.preventDefault\(\);\s+retryLocation\(\);/);
-  assert.match(page, /SEARCH_DEBOUNCE_MS = 350/);
   assert.match(page, /window\.setTimeout/);
-  assert.match(page, /controller\.abort\(\)/);
+  assert.doesNotMatch(page, /SEARCH_DEBOUNCE_MS/);
   assert.match(
     themeToggle,
     /localStorage\.setItem\(THEME_STORAGE_KEY, theme\)/,

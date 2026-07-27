@@ -31,6 +31,7 @@ import {
   searchTermsForLocationSlug,
   slugifyPlaceName,
 } from "./location-slugs.mjs";
+import { nominatimPlaceResults } from "./nominatim-places.mjs";
 import {
   forecastPrecipitationForPeriod,
   formatForecastRainfall,
@@ -57,13 +58,14 @@ const OPEN_METEO_RECORD_START_YEAR = 1950;
 const OPEN_METEO_RECORD_CONCURRENCY = 4;
 const OPEN_METEO_RECORD_CACHE_KEY = "wx-open-meteo-records-v1";
 const FORWARD_GEOCODE_CACHE_KEY = "wx-forward-geocode-v1";
+const PLACE_SEARCH_CACHE_KEY = "wx-place-search-v1";
+const PLACE_SEARCH_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const REVERSE_GEOCODE_CACHE_KEY = "wx-reverse-geocode-v1";
 const REVERSE_GEOCODE_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const AUTO_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const WEATHER_CACHE_KEY = "wx-weather-v1";
 const WEATHER_CACHE_TTL_MS = 60 * 60 * 1000;
 const LEGACY_LOCATION_QUERY_KEY = "location";
-const SEARCH_DEBOUNCE_MS = 350;
 const NOAA_COUNTRY_CODES = new Set(["AS", "GU", "MP", "PR", "US", "VI"]);
 
 type LoadPhase = "locating" | "loading" | "ready" | "error";
@@ -446,6 +448,12 @@ type NominatimResponse = {
 type ForwardGeocodeCacheEntry = {
   key: string;
   place: PlaceResult;
+  updatedAt: number;
+};
+
+type PlaceSearchCacheEntry = {
+  key: string;
+  places: PlaceResult[];
   updatedAt: number;
 };
 
@@ -1519,6 +1527,30 @@ function writeForwardGeocodeCache(entries: ForwardGeocodeCacheEntry[]) {
   }
 }
 
+function readPlaceSearchCache() {
+  if (typeof window === "undefined") return [] as PlaceSearchCacheEntry[];
+
+  try {
+    const value = JSON.parse(
+      window.localStorage.getItem(PLACE_SEARCH_CACHE_KEY) ?? "[]",
+    );
+    return Array.isArray(value) ? (value as PlaceSearchCacheEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePlaceSearchCache(entries: PlaceSearchCacheEntry[]) {
+  try {
+    window.localStorage.setItem(
+      PLACE_SEARCH_CACHE_KEY,
+      JSON.stringify(entries.slice(0, 25)),
+    );
+  } catch {
+    // Place search should continue if storage is unavailable or full.
+  }
+}
+
 function readReverseGeocodeCache() {
   if (typeof window === "undefined") return [] as ReverseGeocodeCacheEntry[];
 
@@ -1569,6 +1601,48 @@ function queueNominatimRequest<T>(request: () => Promise<T>) {
   return run;
 }
 
+async function searchNominatimPlaces(
+  query: string,
+  count: number,
+): Promise<PlaceResult[]> {
+  const key = query.trim().toLocaleLowerCase("en");
+  const cache = readPlaceSearchCache();
+  const cached = cache.find(
+    (entry) =>
+      entry.key === key &&
+      Date.now() - entry.updatedAt < PLACE_SEARCH_CACHE_TTL_MS,
+  );
+
+  if (cached) return cached.places.slice(0, count);
+
+  return queueNominatimRequest(async () => {
+    const url = new URL(NOMINATIM_SEARCH_URL);
+    url.searchParams.set("q", query.trim());
+    url.searchParams.set("format", "geocodejson");
+    url.searchParams.set("addressdetails", "1");
+    url.searchParams.set("featureType", "settlement");
+    url.searchParams.set("limit", String(count));
+    url.searchParams.set("accept-language", "en");
+
+    const response = await fetch(url, {
+      referrerPolicy: "strict-origin-when-cross-origin",
+    });
+    if (!response.ok) {
+      throw new Error(`Place search failed (${response.status})`);
+    }
+
+    const places = nominatimPlaceResults(
+      (await response.json()) as NominatimResponse,
+    ) as PlaceResult[];
+    const nextCache = [
+      { key, places, updatedAt: Date.now() },
+      ...cache.filter((entry) => entry.key !== key),
+    ];
+    writePlaceSearchCache(nextCache);
+    return places.slice(0, count);
+  });
+}
+
 async function forwardGeocodeSlug(slug: string): Promise<PlaceResult | null> {
   const cache = readForwardGeocodeCache();
   const cached = cache.find(
@@ -1594,42 +1668,7 @@ async function forwardGeocodeSlug(slug: string): Promise<PlaceResult | null> {
     if (!response.ok) return null;
 
     const data = (await response.json()) as NominatimResponse;
-    for (const feature of data.features ?? []) {
-      const geocoding = feature.properties?.geocoding;
-      const coordinates = feature.geometry?.coordinates;
-      const countryCode = geocoding?.country_code?.toUpperCase();
-      const name =
-        geocoding?.name ??
-        geocoding?.city ??
-        geocoding?.town ??
-        geocoding?.village ??
-        geocoding?.municipality ??
-        geocoding?.locality;
-      const longitude = coordinates?.[0];
-      const latitude = coordinates?.[1];
-
-      if (
-        !geocoding ||
-        !countryCode ||
-        !name ||
-        !Number.isFinite(latitude) ||
-        !Number.isFinite(longitude)
-      ) {
-        continue;
-      }
-
-      const place: PlaceResult = {
-        admin1: geocoding.state,
-        admin2: geocoding.county ?? geocoding.district,
-        country: geocoding.country ?? countryCode,
-        country_code: countryCode,
-        feature_code: geocoding.type === "neighbourhood" ? "PPLX" : "PPL",
-        id: geocoding.place_id ?? 0,
-        latitude: latitude as number,
-        longitude: longitude as number,
-        name,
-        source: "osm",
-      };
+    for (const place of nominatimPlaceResults(data) as PlaceResult[]) {
       const nextCache = [
         { key: slug, place, updatedAt: Date.now() },
         ...cache.filter((entry) => entry.key !== slug),
@@ -2334,40 +2373,24 @@ export default function WeatherClient() {
   const tooltip = useTooltip();
 
   const searchPlaces = useCallback(
-    async (query: string, signal: AbortSignal) => {
+    async (query: string) => {
       setSearching(true);
       setSearchError("");
 
       try {
-        const results = await fetchPlaceResults(query, 6, signal);
+        const results = await searchNominatimPlaces(query, 6);
 
         setPlaceResults(results);
         setSearchError(results.length ? "" : "No places found.");
       } catch {
-        if (signal.aborted) return;
         setPlaceResults([]);
         setSearchError("Place search is unavailable. Try again.");
       } finally {
-        if (!signal.aborted) setSearching(false);
+        setSearching(false);
       }
     },
     [],
   );
-
-  useEffect(() => {
-    const query = searchQuery.trim();
-    if (!searchOpen || query.length < 2) return;
-
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => {
-      void searchPlaces(query, controller.signal);
-    }, SEARCH_DEBOUNCE_MS);
-
-    return () => {
-      window.clearTimeout(timeout);
-      controller.abort();
-    };
-  }, [searchOpen, searchPlaces, searchQuery]);
 
   const loadCoordinates = useCallback(
     async (
@@ -2851,15 +2874,25 @@ export default function WeatherClient() {
               </button>
             </div>
 
-            <form onSubmit={(event) => event.preventDefault()}>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                const query = searchQuery.trim();
+                if (query.length < 2) {
+                  setSearchError("Enter at least two characters.");
+                  return;
+                }
+                void searchPlaces(query);
+              }}
+            >
               <label className="sr-only" htmlFor="place-query">
-                City or postal code
+                City, region, or country
               </label>
               <div className="search-input-row">
-                <Search aria-hidden="true" size={14} />
                 <input
                   autoComplete="off"
                   autoFocus
+                  disabled={searching}
                   id="place-query"
                   onChange={(event) => {
                     setSearchQuery(event.target.value);
@@ -2867,10 +2900,18 @@ export default function WeatherClient() {
                     setSearchError("");
                     setSearching(false);
                   }}
-                  placeholder="City or postal code"
+                  placeholder="Portland, Oregon"
                   type="search"
                   value={searchQuery}
                 />
+                <button
+                  aria-label="Search places"
+                  className="search-submit"
+                  disabled={searching || searchQuery.trim().length < 2}
+                  type="submit"
+                >
+                  <Search aria-hidden="true" size={14} />
+                </button>
               </div>
             </form>
 
@@ -2880,7 +2921,19 @@ export default function WeatherClient() {
                   ? "Searching..."
                   : searchQuery.trim().length === 1
                     ? "Enter at least two characters."
-                    : "Worldwide locations")}
+                    : placeResults.length
+                      ? "Select a location."
+                      : "Enter a place, then press Enter.")}
+            </p>
+
+            <p className="search-attribution">
+              Search ©{" "}
+              <a
+                href="https://www.openstreetmap.org/copyright"
+                rel="noreferrer"
+              >
+                OpenStreetMap contributors
+              </a>
             </p>
 
             {placeResults.length ? (
