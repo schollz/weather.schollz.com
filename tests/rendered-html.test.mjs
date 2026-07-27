@@ -20,6 +20,9 @@ test("server-renders the local worldwide weather app", async () => {
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
+  assert.match(html, /<style[^>]*data-wthrtxt-styles/i);
+  assert.doesNotMatch(html, /<link[^>]+rel="stylesheet"/i);
+  assert.doesNotMatch(html, /jetbrains-mono-[a-z0-9-]+\.woff2/i);
   assert.match(
     html,
     /<title>Local Weather Forecast: Current, Hourly &amp; 7-Day \| wthrtxt\.com<\/title>/i,

@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import "./globals.css";
+import globalStyles from "./globals.css?inline";
 import {
   ROOT_SOCIAL_TITLE,
   ROOT_TITLE,
@@ -104,6 +104,10 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
+        <style
+          dangerouslySetInnerHTML={{ __html: globalStyles }}
+          data-wthrtxt-styles=""
+        />
         <script
           dangerouslySetInnerHTML={{
             __html: weatherCacheBootstrapScript(),

@@ -13,7 +13,6 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern internal/web/public"
   },
   "dependencies": {
-    "@fontsource/jetbrains-mono": "^5.3.0",
     "lucide-react": "^1.26.0",
     "next": "16.2.6",
     "react": "19.2.6",
