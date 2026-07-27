@@ -668,7 +668,7 @@ a {
   }
 
   .current-facts {
-    gap: 12px;
+    gap: 6px;
     flex-direction: column;
     align-items: flex-start;
   }
