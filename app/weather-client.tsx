@@ -57,6 +57,7 @@ const OPEN_METEO_RECORD_CACHE_KEY = "wx-open-meteo-records-v1";
 const FORWARD_GEOCODE_CACHE_KEY = "wx-forward-geocode-v1";
 const REVERSE_GEOCODE_CACHE_KEY = "wx-reverse-geocode-v1";
 const REVERSE_GEOCODE_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const AUTO_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const WEATHER_CACHE_KEY = "wx-weather-v1";
 const WEATHER_CACHE_TTL_MS = 60 * 60 * 1000;
 const LEGACY_LOCATION_QUERY_KEY = "location";
@@ -2378,6 +2379,29 @@ export default function WeatherClient() {
     [],
   );
 
+  const refreshCurrentWeather = useCallback(() => {
+    if (!weather) return;
+
+    void loadCoordinates(
+      weather.coordinates.latitude,
+      weather.coordinates.longitude,
+      weather.locationHint,
+      readSharedLocationSlug(),
+      true,
+    );
+  }, [loadCoordinates, weather]);
+
+  useEffect(() => {
+    if (!weather) return;
+
+    const interval = window.setInterval(
+      refreshCurrentWeather,
+      AUTO_REFRESH_INTERVAL_MS,
+    );
+
+    return () => window.clearInterval(interval);
+  }, [refreshCurrentWeather, weather]);
+
   useEffect(() => {
     const controller = new AbortController();
 
@@ -3156,13 +3180,7 @@ export default function WeatherClient() {
             ) : null}
             <button
               className="text-button"
-              onClick={() =>
-                loadCoordinates(
-                  weather.coordinates.latitude,
-                  weather.coordinates.longitude,
-                  weather.locationHint,
-                )
-              }
+              onClick={refreshCurrentWeather}
               type="button"
             >
               <RefreshCw aria-hidden="true" size={13} />

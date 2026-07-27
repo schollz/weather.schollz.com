@@ -131,6 +131,15 @@ test("keeps worldwide weather requests and geolocation in the client app", async
   assert.match(page, /wx-open-meteo-records-v1/);
   assert.match(page, /wx-reverse-geocode-v1/);
   assert.match(page, /wx-forward-geocode-v1/);
+  assert.match(page, /AUTO_REFRESH_INTERVAL_MS = 30 \* 60 \* 1000/);
+  assert.match(
+    page,
+    /window\.setInterval\(\s*refreshCurrentWeather,\s*AUTO_REFRESH_INTERVAL_MS/,
+  );
+  assert.match(
+    page,
+    /weather\.locationHint,\s+readSharedLocationSlug\(\),\s+true,/,
+  );
   assert.match(page, /WEATHER_CACHE_TTL_MS = 60 \* 60 \* 1000/);
   assert.match(page, /cachedWeatherForCoordinates/);
   assert.match(page, /cachedWeatherForPath\(window\.location\.pathname\)/);
