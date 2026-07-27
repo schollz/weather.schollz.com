@@ -35,11 +35,20 @@ func run(logger *slog.Logger) error {
 	}
 
 	dataDirectory := cacheDirectory()
-	cache, err := store.Open(filepath.Join(dataDirectory, "cache.db"), 256)
+	cachePath := filepath.Join(dataDirectory, "cache.db")
+	cache, err := store.Open(cachePath, 256)
 	if err != nil {
 		return fmt.Errorf("open persistent cache: %w", err)
 	}
 	defer cache.Close()
+	cachePending := !cache.Persistent()
+	if cachePending {
+		logger.Warn(
+			"persistent cache is locked; serving from memory during deployment handoff",
+			"path",
+			cachePath,
+		)
+	}
 
 	geoPath := environment(
 		"GEOLITE2_DB",
@@ -85,6 +94,17 @@ func run(logger *slog.Logger) error {
 		syscall.SIGTERM,
 	)
 	defer stop()
+	if cachePending {
+		go func() {
+			if err := cache.WaitForPersistence(shutdownContext); err != nil {
+				if !errors.Is(err, context.Canceled) {
+					logger.Error("attach persistent cache", "error", err)
+				}
+				return
+			}
+			logger.Info("persistent cache attached", "path", cachePath)
+		}()
+	}
 
 	serverErrors := make(chan error, 1)
 	go func() {
