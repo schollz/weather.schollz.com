@@ -42,6 +42,10 @@ import {
 } from "./precipitation.mjs";
 import { SITE_NAME, SITE_URL } from "./site";
 import ThemeToggle from "./theme-toggle";
+import {
+  WEATHER_CACHE_KEY,
+  WEATHER_CACHE_TTL_MS,
+} from "./weather-cache-bootstrap.mjs";
 
 const DISPLAY_HOURS = Array.from({ length: 18 }, (_, index) => index + 5);
 const SEATTLE = { latitude: 47.6062, longitude: -122.3321 };
@@ -63,8 +67,6 @@ const PLACE_SEARCH_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const REVERSE_GEOCODE_CACHE_KEY = "wx-reverse-geocode-v1";
 const REVERSE_GEOCODE_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const AUTO_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
-const WEATHER_CACHE_KEY = "wx-weather-v1";
-const WEATHER_CACHE_TTL_MS = 60 * 60 * 1000;
 const LEGACY_LOCATION_QUERY_KEY = "location";
 const NOAA_COUNTRY_CODES = new Set(["AS", "GU", "MP", "PR", "US", "VI"]);
 
@@ -2468,6 +2470,12 @@ export default function WeatherClient() {
   }, [refreshCurrentWeather, weather]);
 
   useEffect(() => {
+    if (phase === "ready" || phase === "error") {
+      document.documentElement.removeAttribute("data-weather-cache");
+    }
+  }, [phase]);
+
+  useEffect(() => {
     const controller = new AbortController();
 
     if (!weather?.recordKey) return () => controller.abort();
@@ -2548,6 +2556,8 @@ export default function WeatherClient() {
       });
       return;
     }
+
+    document.documentElement.removeAttribute("data-weather-cache");
 
     if (sharedSlug) {
       queueMicrotask(() => {
@@ -2840,7 +2850,6 @@ export default function WeatherClient() {
             >
               <FileText aria-hidden="true" size={14} />
             </a>
-            <ThemeToggle showTooltip />
             <Link
               aria-label="About wthrtxt.com"
               className="icon-button hover-tip header-tip"
@@ -2849,6 +2858,7 @@ export default function WeatherClient() {
             >
               <CircleHelp aria-hidden="true" size={14} />
             </Link>
+            <ThemeToggle showTooltip />
           </div>
         </div>
 

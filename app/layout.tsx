@@ -9,6 +9,7 @@ import {
   SOCIAL_IMAGE,
   siteJsonLd,
 } from "./site";
+import { weatherCacheBootstrapScript } from "./weather-cache-bootstrap.mjs";
 
 export const dynamic = "force-static";
 
@@ -103,6 +104,12 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: weatherCacheBootstrapScript(),
+          }}
+          id="weather-cache-bootstrap"
+        />
         <script
           dangerouslySetInnerHTML={{
             __html:

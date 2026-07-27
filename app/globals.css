@@ -50,6 +50,10 @@ a {
   padding: 28px 0 52px;
 }
 
+:root[data-weather-cache="hit"] .status-panel {
+  visibility: hidden;
+}
+
 .site-header {
   position: relative;
   padding: 0 0 4px;

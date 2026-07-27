@@ -45,6 +45,8 @@ test("server-renders the local worldwide weather app", async () => {
   assert.match(html, /type="application\/ld\+json"/i);
   assert.match(html, /"@type":"WebSite"/i);
   assert.match(html, /"@type":"WebApplication"/i);
+  assert.match(html, /id="weather-cache-bootstrap"/i);
+  assert.match(html, /dataset\.weatherCache="hit"/i);
   assert.match(
     html,
     /<a[^>]*href="\/"[^>]*>wthrtxt\.com<\/a>/i,
@@ -73,9 +75,14 @@ test("server-renders the concise about page and its SEO metadata", async () => {
 });
 
 test("keeps worldwide weather requests and geolocation in the client app", async () => {
-  const [page, themeToggle] = await Promise.all([
+  const [page, themeToggle, styles, cacheBootstrap] = await Promise.all([
     readFile(new URL("../app/weather-client.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/theme-toggle.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+    readFile(
+      new URL("../app/weather-cache-bootstrap.mjs", import.meta.url),
+      "utf8",
+    ),
   ]);
 
   assert.match(page, /navigator\.geolocation\.getCurrentPosition/);
@@ -114,6 +121,14 @@ test("keeps worldwide weather requests and geolocation in the client app", async
   assert.match(page, /event\.preventDefault\(\);\s+retryLocation\(\);/);
   assert.match(page, /window\.setTimeout/);
   assert.doesNotMatch(page, /SEARCH_DEBOUNCE_MS/);
+  assert.match(
+    page,
+    /document\.documentElement\.removeAttribute\("data-weather-cache"\)/,
+  );
+  assert.match(
+    styles,
+    /:root\[data-weather-cache="hit"\] \.status-panel\s*\{\s*visibility: hidden;/,
+  );
   assert.match(
     themeToggle,
     /localStorage\.setItem\(THEME_STORAGE_KEY, theme\)/,
@@ -170,13 +185,17 @@ test("keeps worldwide weather requests and geolocation in the client app", async
     page,
     /weather\.locationHint,\s+readSharedLocationSlug\(\),\s+true,/,
   );
-  assert.match(page, /WEATHER_CACHE_TTL_MS = 60 \* 60 \* 1000/);
+  assert.match(cacheBootstrap, /WEATHER_CACHE_TTL_MS = 60 \* 60 \* 1000/);
   assert.match(page, /cachedWeatherForCoordinates/);
   assert.match(page, /cachedWeatherForPath\(window\.location\.pathname\)/);
   assert.match(page, /fetch\("\/api\/weather-cache"/);
   assert.match(page, /max_age_seconds: maxAgeSeconds/);
   assert.match(page, /href="\?format=text"/);
   assert.match(page, /href="\/about\/"/);
+  assert.ok(
+    page.indexOf('href="/about/"') <
+      page.indexOf("<ThemeToggle showTooltip />"),
+  );
   assert.match(page, /updateLocationJsonLd/);
   assert.match(page, /Weather Forecast: Hourly & 7-Day/);
   assert.match(page, /REVERSE_GEOCODE_CACHE_TTL_MS/);
