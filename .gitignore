@@ -3,6 +3,11 @@
 /.vinext/
 /.wrangler/
 /dist/
+/internal/web/public/*
+!/internal/web/public/placeholder.txt
+/data/
+/wthrtxt
+/GeoLite2-City.mmdb
 next-env.d.ts
 *.tsbuildinfo
 .env*

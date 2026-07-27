@@ -1,5 +1,5 @@
 {
-  "name": "weather.schollz.com",
+  "name": "wthrtxt.com",
   "version": "0.1.0",
   "private": true,
   "engines": {
@@ -7,11 +7,10 @@
   },
   "scripts": {
     "dev": "vinext dev",
-    "build": "vinext build",
-    "build:pages": "GITHUB_PAGES=true vinext build && node scripts/verify-pages-build.mjs",
+    "build": "STATIC_EXPORT=true vinext build && node scripts/sync-embedded-assets.mjs",
     "start": "vinext start",
     "test": "npm run build && node --test tests/*.test.mjs",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern internal/web/public"
   },
   "dependencies": {
     "@fontsource/jetbrains-mono": "^5.3.0",

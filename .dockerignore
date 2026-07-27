@@ -1,0 +1,11 @@
+.git
+.github
+.next
+.vinext
+data
+dist
+node_modules
+internal/web/public/*
+!internal/web/public/placeholder.txt
+/wthrtxt
+*.log

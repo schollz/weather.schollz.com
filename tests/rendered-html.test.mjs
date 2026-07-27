@@ -22,11 +22,11 @@ test("server-renders the local worldwide weather app", async () => {
   const html = await response.text();
   assert.match(
     html,
-    /<title>weather\.schollz\.com — local worldwide weather<\/title>/i,
+    /<title>wthrtxt\.com — local worldwide weather<\/title>/i,
   );
   assert.match(
     html,
-    /<link rel="canonical" href="https:\/\/weather\.schollz\.com\/?"/i,
+    /<link rel="canonical" href="https:\/\/wthrtxt\.com\/?"/i,
   );
   assert.match(
     html,
@@ -41,7 +41,7 @@ test("server-renders the local worldwide weather app", async () => {
   assert.match(html, /"@type":"WebApplication"/i);
   assert.match(
     html,
-    /<a[^>]*href="\/"[^>]*>weather\.schollz\.com<\/a>/i,
+    /<a[^>]*href="\/"[^>]*>wthrtxt\.com<\/a>/i,
   );
   assert.match(html, /locating/);
   assert.match(html, /Finding your local weather/);
@@ -171,4 +171,20 @@ test("keeps worldwide weather requests and geolocation in the client app", async
   assert.match(page, /weather\.current\.windSpeed/);
   assert.match(page, /Open-Meteo ERA5-Land/);
   assert.match(page, /contacting weather services/);
+});
+
+test("uses wthrtxt.com as the public product identity", async () => {
+  const files = await Promise.all(
+    [
+      "../README.md",
+      "../app/layout.tsx",
+      "../app/weather-client.tsx",
+      "../package.json",
+      "../public/favicon.svg",
+    ].map((path) => readFile(new URL(path, import.meta.url), "utf8")),
+  );
+  const combined = files.join("\n");
+
+  assert.match(combined, /wthrtxt\.com/);
+  assert.doesNotMatch(combined, /weather\.schollz\.com/);
 });

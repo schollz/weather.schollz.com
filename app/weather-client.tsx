@@ -1105,7 +1105,7 @@ function updateSharedLocation(weather: WeatherData, slug: string) {
   );
 
   const placeName = [weather.city, weather.state].filter(Boolean).join(", ");
-  const title = `${placeName} weather — weather.schollz.com`;
+  const title = `${placeName} weather — wthrtxt.com`;
   const description = `Current conditions, hourly weather, and a seven-day forecast for ${placeName}.`;
   const canonicalUrl = new URL(`/${slug}/`, window.location.origin).href;
   const canonical = document.querySelector<HTMLLinkElement>(
@@ -2270,7 +2270,7 @@ export default function WeatherClient() {
               retryLocation();
             }}
           >
-            weather.schollz.com
+            wthrtxt.com
           </Link>
           <div className="header-actions">
             <button
@@ -2732,9 +2732,9 @@ export default function WeatherClient() {
               <p className="status-code">&gt; location / data error</p>
               <h1>{error}</h1>
               <p>
-                This site has no server. Weather and place requests go directly
-                from your browser to the listed providers; repeat lookups may
-                be cached in your browser.
+                Browser weather and place requests go directly to the listed
+                providers. Terminal forecasts are rendered by the wthrtxt.com
+                server; repeat lookups may be cached.
               </p>
               <div className="status-actions">
                 <button

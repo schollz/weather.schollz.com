@@ -1,0 +1,31 @@
+Weather for Seattle, WA
+Monday, Jul 27 / observed 2:35 AM
+
+Current conditions
+temp       61°F
+sky        Cloudy
+humidity   84%
+wind       5 mph
+
+============================================================
+Monday, Jul 27
+
+   time     sky                       temp   humid  rain*
+>  5 AM     Cloudy                    60°F     85%      2%
+   6 AM     Partly cloudy with an i…  61°F     84%      3%
+
+* past = observed 1h rainfall (in.)
+  future = precipitation chance
+  earlier observations use station KBFI
+============================================================
+7-day forecast
+
+day       sky                   high   low  rec hi  rec lo  rain
+Mon 7/27  Cloudy                79°F  58°F    96°F    49°F    2%
+Tue 7/28  Partly cloudy         79°F  58°F       —       —    3%
+
+location: 47.606, -122.332 / America/Los_Angeles
+data: NOAA
+history: station KBFI
+records: ACIS / BOEING FIELD
+service: wthrtxt.com

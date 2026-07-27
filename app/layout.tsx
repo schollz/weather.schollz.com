@@ -3,8 +3,8 @@ import "./globals.css";
 
 export const dynamic = "force-static";
 
-const SITE_NAME = "weather.schollz.com";
-const SITE_URL = "https://weather.schollz.com";
+const SITE_NAME = "wthrtxt.com";
+const SITE_URL = "https://wthrtxt.com";
 const DESCRIPTION =
   "Local worldwide weather with current conditions, hourly details, seven-day forecasts, and daily temperature records from NOAA, ACIS, and Open-Meteo.";
 
