@@ -103,3 +103,25 @@ func TestRenderTextShowsWarmingAndObservedRain(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderTextAttributesOpenStreetMapGeocoding(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	report := WeatherReport{
+		Location: Location{
+			Name: "Portland", Region: "Oregon", TimeZone: "UTC",
+			Latitude: 45.5202471, Longitude: -122.674194,
+			Source: "OpenStreetMap Nominatim",
+		},
+		Current:      CurrentConditions{ObservedAt: now},
+		Provider:     "Open-Meteo",
+		RecordsState: "unavailable",
+	}
+
+	rendered := RenderText(report, now)
+	if !strings.Contains(
+		rendered,
+		"geocoding: © OpenStreetMap contributors / openstreetmap.org/copyright",
+	) {
+		t.Fatalf("OpenStreetMap attribution missing:\n%s", rendered)
+	}
+}

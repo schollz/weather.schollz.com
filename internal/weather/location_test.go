@@ -55,8 +55,79 @@ func TestGeocoderUsesFixturesAndCache(t *testing.T) {
 	if first.Name != "Seattle" || second.TimeZone != "America/Los_Angeles" {
 		t.Fatalf("unexpected locations: %#v %#v", first, second)
 	}
+	if first.CanonicalSlug != "seattle" {
+		t.Fatalf("unexpected canonical slug: %q", first.CanonicalSlug)
+	}
 	if requests != 1 {
 		t.Fatalf("expected cached lookup, got %d requests", requests)
+	}
+}
+
+func TestGeocoderFallsBackToNominatimForwardSearch(t *testing.T) {
+	geocodingRequests := 0
+	geocodingFixture := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		geocodingRequests++
+		response.Header().Set("Content-Type", "application/json")
+		if request.URL.Query().Get("name") == "portland" {
+			_, _ = response.Write([]byte(`{"results":[
+				{"name":"Portland","admin1":"Oregon","country":"United States","country_code":"US","feature_code":"PPLA2","latitude":45.52345,"longitude":-122.67621},
+				{"name":"Portland","admin1":"Maine","country":"United States","country_code":"US","feature_code":"PPLA2","latitude":43.65737,"longitude":-70.2589}
+			]}`))
+			return
+		}
+		_, _ = response.Write([]byte(`{"results":[]}`))
+	}))
+	defer geocodingFixture.Close()
+
+	forwardRequests := 0
+	forwardFixture := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		forwardRequests++
+		if request.URL.Query().Get("q") != "portland oregon" ||
+			request.URL.Query().Get("featureType") != "settlement" {
+			t.Errorf("unexpected forward query: %s", request.URL.RawQuery)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"features":[{
+			"properties":{"geocoding":{
+				"name":"Portland","state":"Oregon","country":"United States","country_code":"us"
+			}},
+			"geometry":{"coordinates":[-122.674194,45.5202471]}
+		}]}`))
+	}))
+	defer forwardFixture.Close()
+
+	geocoder := NewGeocoder(
+		&HTTPClient{Client: geocodingFixture.Client(), Retries: 0},
+		store.NewMemory(10),
+	)
+	geocoder.GeocodingURL = geocodingFixture.URL
+	geocoder.ForwardURL = forwardFixture.URL
+	geocoder.ReverseDelay = 0
+
+	first, err := geocoder.ResolveSlug(context.Background(), "portland oregon")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := geocoder.ResolveSlug(context.Background(), "portland-oregon")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if first.Name != "Portland" || first.Region != "Oregon" ||
+		first.Source != "OpenStreetMap Nominatim" ||
+		first.CanonicalSlug != "portland-or" ||
+		first.Latitude != 45.5202471 || first.Longitude != -122.674194 {
+		t.Fatalf("unexpected location: %#v", first)
+	}
+	if second != first {
+		t.Fatalf("expected normalized slug cache hit: %#v %#v", first, second)
+	}
+	if geocodingRequests != 2 || forwardRequests != 1 {
+		t.Fatalf(
+			"unexpected request counts: geocoding=%d forward=%d",
+			geocodingRequests,
+			forwardRequests,
+		)
 	}
 }
 

@@ -93,6 +93,7 @@ test("keeps worldwide weather requests and geolocation in the client app", async
   assert.match(page, /https:\/\/api\.open-meteo\.com\/v1\/forecast/);
   assert.match(page, /https:\/\/archive-api\.open-meteo\.com\/v1\/archive/);
   assert.match(page, /https:\/\/nominatim\.openstreetmap\.org\/reverse/);
+  assert.match(page, /https:\/\/nominatim\.openstreetmap\.org\/search/);
   assert.match(page, /NOAA_COUNTRY_CODES/);
   assert.match(page, /"AS", "GU", "MP", "PR", "US", "VI"/);
   assert.match(page, /getWeatherForCoordinates/);
@@ -129,6 +130,7 @@ test("keeps worldwide weather requests and geolocation in the client app", async
   assert.match(page, /isValidUtcDate/);
   assert.match(page, /wx-open-meteo-records-v1/);
   assert.match(page, /wx-reverse-geocode-v1/);
+  assert.match(page, /wx-forward-geocode-v1/);
   assert.match(page, /REVERSE_GEOCODE_CACHE_TTL_MS/);
   assert.match(page, /format", "geocodejson"/);
   assert.match(page, /zoom", "10"/);

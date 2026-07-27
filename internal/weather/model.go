@@ -3,14 +3,15 @@ package weather
 import "time"
 
 type Location struct {
-	Name        string  `json:"name"`
-	Region      string  `json:"region"`
-	Country     string  `json:"country"`
-	CountryCode string  `json:"country_code"`
-	TimeZone    string  `json:"time_zone"`
-	Latitude    float64 `json:"latitude"`
-	Longitude   float64 `json:"longitude"`
-	Source      string  `json:"source"`
+	Name          string  `json:"name"`
+	Region        string  `json:"region"`
+	Country       string  `json:"country"`
+	CountryCode   string  `json:"country_code"`
+	TimeZone      string  `json:"time_zone"`
+	Latitude      float64 `json:"latitude"`
+	Longitude     float64 `json:"longitude"`
+	Source        string  `json:"source"`
+	CanonicalSlug string  `json:"canonical_slug,omitempty"`
 }
 
 type CurrentConditions struct {

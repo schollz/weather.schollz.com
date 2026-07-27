@@ -102,6 +102,9 @@ func RenderText(report WeatherReport, now time.Time) string {
 	if report.LocationFromIP {
 		output.WriteString("geolocation: MaxMind GeoLite2 City (IP estimate)\n")
 	}
+	if report.Location.Source == "OpenStreetMap Nominatim" {
+		output.WriteString("geocoding: © OpenStreetMap contributors / openstreetmap.org/copyright\n")
+	}
 	fmt.Fprintf(&output, "data: %s\n", report.Provider)
 	if report.StationID != "" {
 		fmt.Fprintf(&output, "history: station %s\n", report.StationID)

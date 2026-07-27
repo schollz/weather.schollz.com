@@ -171,6 +171,33 @@ func TestFormatOverrideAndStaticRoutes(t *testing.T) {
 	}
 }
 
+func TestTerminalLocationAliasRedirectsToCanonicalSlug(t *testing.T) {
+	handler, reporter, geocoder, _ := testServer(t)
+	geocoder.slugLocation = weather.Location{
+		Name: "Portland", Region: "Oregon", CountryCode: "US",
+		Latitude: 45.5202471, Longitude: -122.674194,
+		CanonicalSlug: "portland-or",
+	}
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"http://wthrtxt.com/portland%20oregon?format=text",
+		nil,
+	)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusPermanentRedirect {
+		t.Fatalf("unexpected status: %d %q", response.Code, response.Body.String())
+	}
+	if location := response.Header().Get("Location"); location != "/portland-or/?format=text" {
+		t.Fatalf("unexpected redirect location: %q", location)
+	}
+	if reporter.calls != 0 {
+		t.Fatal("alias redirect should not fetch weather")
+	}
+}
+
 func TestRootUsesTrustedForwardedIP(t *testing.T) {
 	handler, _, _, resolver := testServer(t)
 	request := httptest.NewRequest(http.MethodGet, "http://wthrtxt.com/", nil)

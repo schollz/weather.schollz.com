@@ -147,6 +147,17 @@ func (s *Server) serveTerminal(response http.ResponseWriter, request *http.Reque
 		s.writeTextError(response, request, status, err.Error())
 		return
 	}
+	if location.CanonicalSlug != "" {
+		requestSlug := strings.Trim(request.URL.Path, "/")
+		if requestSlug != location.CanonicalSlug {
+			target := url.URL{
+				Path:     "/" + location.CanonicalSlug + "/",
+				RawQuery: request.URL.RawQuery,
+			}
+			http.Redirect(response, request, target.String(), http.StatusPermanentRedirect)
+			return
+		}
+	}
 
 	report, err := s.Reporter.Report(request.Context(), location)
 	if err != nil {

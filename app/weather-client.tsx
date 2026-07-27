@@ -42,6 +42,8 @@ import {
 const DISPLAY_HOURS = Array.from({ length: 18 }, (_, index) => index + 5);
 const SEATTLE = { latitude: 47.6062, longitude: -122.3321 };
 const ACIS_STATION_DATA_URL = "https://data.rcc-acis.org/StnData";
+const NOMINATIM_SEARCH_URL =
+  "https://nominatim.openstreetmap.org/search";
 const NOMINATIM_REVERSE_URL =
   "https://nominatim.openstreetmap.org/reverse";
 const OPEN_METEO_ARCHIVE_URL =
@@ -51,6 +53,7 @@ const OPEN_METEO_FORECAST_URL =
 const OPEN_METEO_RECORD_START_YEAR = 1950;
 const OPEN_METEO_RECORD_CONCURRENCY = 4;
 const OPEN_METEO_RECORD_CACHE_KEY = "wx-open-meteo-records-v1";
+const FORWARD_GEOCODE_CACHE_KEY = "wx-forward-geocode-v1";
 const REVERSE_GEOCODE_CACHE_KEY = "wx-reverse-geocode-v1";
 const REVERSE_GEOCODE_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const LEGACY_LOCATION_QUERY_KEY = "location";
@@ -82,6 +85,7 @@ type PlaceResult = {
   latitude: number;
   longitude: number;
   name: string;
+  source?: LocationSource;
   timezone?: string;
 };
 
@@ -433,21 +437,33 @@ type OpenMeteoArchiveResponse = {
 
 type NominatimResponse = {
   features?: Array<{
+    geometry?: {
+      coordinates?: [number, number];
+    };
     properties?: {
       geocoding?: {
         city?: string;
         country?: string;
         country_code?: string;
+        county?: string;
         district?: string;
         locality?: string;
         municipality?: string;
         name?: string;
+        place_id?: number;
         state?: string;
         town?: string;
+        type?: string;
         village?: string;
       };
     };
   }>;
+};
+
+type ForwardGeocodeCacheEntry = {
+  key: string;
+  place: PlaceResult;
+  updatedAt: number;
 };
 
 type ReverseGeocodeCacheEntry = {
@@ -996,7 +1012,7 @@ function locationHintFromPlace(place: PlaceResult): LocationHint {
     country: place.country ?? place.country_code,
     countryCode: place.country_code.toUpperCase(),
     region: place.admin1 ?? place.admin2 ?? "",
-    source: "open-meteo-geocoding",
+    source: place.source ?? "open-meteo-geocoding",
   };
 }
 
@@ -1024,16 +1040,55 @@ async function fetchPlaceResults(
 }
 
 async function resolveLocationSlug(slug: string) {
+  const resultSets: PlaceResult[][] = [];
+
   for (const query of searchTermsForLocationSlug(slug)) {
-    const results = await fetchPlaceResults(query, 10);
+    let results: PlaceResult[];
+    try {
+      results = await fetchPlaceResults(query, 10);
+    } catch {
+      break;
+    }
+    resultSets.push(results);
+
     const place = results.find(
       (candidate) => locationSlugForPlace(candidate, results) === slug,
     );
 
-    if (place) return place;
+    if (place) return { canonicalSlug: slug, place };
   }
 
-  return null;
+  const place = await forwardGeocodeSlug(slug);
+  if (!place) return null;
+
+  for (const results of resultSets) {
+    const matchingPlace = results.find((candidate) => {
+      if (
+        candidate.country_code.toUpperCase() !==
+          place.country_code.toUpperCase() ||
+        slugifyPlaceName(candidate.name) !== slugifyPlaceName(place.name)
+      ) {
+        return false;
+      }
+
+      const candidateRegion = slugifyPlaceName(
+        candidate.admin1 ?? candidate.admin2 ?? "",
+      );
+      const placeRegion = slugifyPlaceName(
+        place.admin1 ?? place.admin2 ?? "",
+      );
+      return !candidateRegion || !placeRegion || candidateRegion === placeRegion;
+    });
+
+    if (matchingPlace) {
+      return {
+        canonicalSlug: locationSlugForPlace(matchingPlace, results),
+        place,
+      };
+    }
+  }
+
+  return { canonicalSlug: slug, place };
 }
 
 function coordinateDistance(
@@ -1133,6 +1188,30 @@ function coordinateCacheKey(latitude: number, longitude: number) {
   return `${latitude.toFixed(3)},${longitude.toFixed(3)}`;
 }
 
+function readForwardGeocodeCache() {
+  if (typeof window === "undefined") return [] as ForwardGeocodeCacheEntry[];
+
+  try {
+    const value = JSON.parse(
+      window.localStorage.getItem(FORWARD_GEOCODE_CACHE_KEY) ?? "[]",
+    );
+    return Array.isArray(value) ? (value as ForwardGeocodeCacheEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeForwardGeocodeCache(entries: ForwardGeocodeCacheEntry[]) {
+  try {
+    window.localStorage.setItem(
+      FORWARD_GEOCODE_CACHE_KEY,
+      JSON.stringify(entries.slice(0, 25)),
+    );
+  } catch {
+    // Weather should continue even if storage is unavailable or full.
+  }
+}
+
 function readReverseGeocodeCache() {
   if (typeof window === "undefined") return [] as ReverseGeocodeCacheEntry[];
 
@@ -1157,30 +1236,103 @@ function writeReverseGeocodeCache(entries: ReverseGeocodeCacheEntry[]) {
   }
 }
 
-let reverseGeocodeQueue: Promise<void> = Promise.resolve();
-let lastReverseGeocodeRequest = 0;
+let nominatimQueue: Promise<void> = Promise.resolve();
+let lastNominatimRequest = 0;
 
-function queueReverseGeocode<T>(request: () => Promise<T>) {
-  const run = reverseGeocodeQueue.then(async () => {
+function queueNominatimRequest<T>(request: () => Promise<T>) {
+  const run = nominatimQueue.then(async () => {
     const waitFor = Math.max(
       0,
-      1000 - (Date.now() - lastReverseGeocodeRequest),
+      1000 - (Date.now() - lastNominatimRequest),
     );
 
     if (waitFor > 0) {
       await new Promise((resolve) => window.setTimeout(resolve, waitFor));
     }
 
-    lastReverseGeocodeRequest = Date.now();
+    lastNominatimRequest = Date.now();
     return request();
   });
 
-  reverseGeocodeQueue = run.then(
+  nominatimQueue = run.then(
     () => undefined,
     () => undefined,
   );
 
   return run;
+}
+
+async function forwardGeocodeSlug(slug: string): Promise<PlaceResult | null> {
+  const cache = readForwardGeocodeCache();
+  const cached = cache.find(
+    (entry) =>
+      entry.key === slug &&
+      Date.now() - entry.updatedAt < REVERSE_GEOCODE_CACHE_TTL_MS,
+  );
+
+  if (cached) return cached.place;
+
+  return queueNominatimRequest(async () => {
+    const url = new URL(NOMINATIM_SEARCH_URL);
+    url.searchParams.set("q", slug.replaceAll("-", " "));
+    url.searchParams.set("format", "geocodejson");
+    url.searchParams.set("addressdetails", "1");
+    url.searchParams.set("featureType", "settlement");
+    url.searchParams.set("limit", "5");
+    url.searchParams.set("accept-language", "en");
+
+    const response = await fetch(url, {
+      referrerPolicy: "strict-origin-when-cross-origin",
+    });
+    if (!response.ok) return null;
+
+    const data = (await response.json()) as NominatimResponse;
+    for (const feature of data.features ?? []) {
+      const geocoding = feature.properties?.geocoding;
+      const coordinates = feature.geometry?.coordinates;
+      const countryCode = geocoding?.country_code?.toUpperCase();
+      const name =
+        geocoding?.name ??
+        geocoding?.city ??
+        geocoding?.town ??
+        geocoding?.village ??
+        geocoding?.municipality ??
+        geocoding?.locality;
+      const longitude = coordinates?.[0];
+      const latitude = coordinates?.[1];
+
+      if (
+        !geocoding ||
+        !countryCode ||
+        !name ||
+        !Number.isFinite(latitude) ||
+        !Number.isFinite(longitude)
+      ) {
+        continue;
+      }
+
+      const place: PlaceResult = {
+        admin1: geocoding.state,
+        admin2: geocoding.county ?? geocoding.district,
+        country: geocoding.country ?? countryCode,
+        country_code: countryCode,
+        feature_code: geocoding.type === "neighbourhood" ? "PPLX" : "PPL",
+        id: geocoding.place_id ?? 0,
+        latitude: latitude as number,
+        longitude: longitude as number,
+        name,
+        source: "osm",
+      };
+      const nextCache = [
+        { key: slug, place, updatedAt: Date.now() },
+        ...cache.filter((entry) => entry.key !== slug),
+      ];
+      writeForwardGeocodeCache(nextCache);
+      return place;
+    }
+
+    return null;
+  });
 }
 
 async function reverseGeocodeCoordinates(
@@ -1197,7 +1349,7 @@ async function reverseGeocodeCoordinates(
 
   if (cached) return cached.hint;
 
-  return queueReverseGeocode(async () => {
+  return queueNominatimRequest(async () => {
     const url = new URL(NOMINATIM_REVERSE_URL);
     url.searchParams.set("lat", latitude.toFixed(4));
     url.searchParams.set("lon", longitude.toFixed(4));
@@ -2028,8 +2180,8 @@ export default function WeatherClient() {
       queueMicrotask(() => {
         setPhase("loading");
         void resolveLocationSlug(sharedSlug)
-          .then((place) => {
-            if (!place) {
+          .then((resolved) => {
+            if (!resolved) {
               setError(
                 `The place link “${sharedSlug}” could not be found. Search for another place or use your current location.`,
               );
@@ -2038,10 +2190,10 @@ export default function WeatherClient() {
             }
 
             return loadCoordinates(
-              place.latitude,
-              place.longitude,
-              locationHintFromPlace(place),
-              sharedSlug,
+              resolved.place.latitude,
+              resolved.place.longitude,
+              locationHintFromPlace(resolved.place),
+              resolved.canonicalSlug,
             );
           })
           .catch(() => {

@@ -21,6 +21,7 @@ import (
 
 const (
 	defaultGeocodingURL = "https://geocoding-api.open-meteo.com/v1/search"
+	defaultForwardURL   = "https://nominatim.openstreetmap.org/search"
 	defaultReverseURL   = "https://nominatim.openstreetmap.org/reverse"
 )
 
@@ -35,12 +36,13 @@ type Geocoder struct {
 	HTTP          *HTTPClient
 	Cache         locationCache
 	GeocodingURL  string
+	ForwardURL    string
 	ReverseURL    string
 	ReverseDelay  time.Duration
 	now           func() time.Time
 	group         singleflight.Group
-	reverseMu     sync.Mutex
-	lastReverseAt time.Time
+	nominatimMu   sync.Mutex
+	lastNominatim time.Time
 }
 
 func NewGeocoder(httpClient *HTTPClient, cache *store.Store) *Geocoder {
@@ -48,6 +50,7 @@ func NewGeocoder(httpClient *HTTPClient, cache *store.Store) *Geocoder {
 		HTTP:         httpClient,
 		Cache:        cache,
 		GeocodingURL: defaultGeocodingURL,
+		ForwardURL:   defaultForwardURL,
 		ReverseURL:   defaultReverseURL,
 		ReverseDelay: time.Second,
 		now:          time.Now,
@@ -70,6 +73,31 @@ type placeResult struct {
 	Timezone    string  `json:"timezone"`
 }
 
+type nominatimResponse struct {
+	Features []struct {
+		Geometry struct {
+			Coordinates []float64 `json:"coordinates"`
+		} `json:"geometry"`
+		Properties struct {
+			Geocoding nominatimPlace `json:"geocoding"`
+		} `json:"properties"`
+	} `json:"features"`
+}
+
+type nominatimPlace struct {
+	City         string `json:"city"`
+	Country      string `json:"country"`
+	CountryCode  string `json:"country_code"`
+	County       string `json:"county"`
+	District     string `json:"district"`
+	Locality     string `json:"locality"`
+	Municipality string `json:"municipality"`
+	Name         string `json:"name"`
+	State        string `json:"state"`
+	Town         string `json:"town"`
+	Village      string `json:"village"`
+}
+
 func (g *Geocoder) ResolveSlug(ctx context.Context, slug string) (Location, error) {
 	slug = slugify(slug)
 	if slug == "" || len(slug) > 100 {
@@ -83,23 +111,39 @@ func (g *Geocoder) ResolveSlug(ctx context.Context, slug string) (Location, erro
 	}
 
 	value, err, _ := g.group.Do(cacheKey, func() (any, error) {
+		var resultSets [][]placeResult
+		var geocodingErr error
 		for _, query := range searchTermsForSlug(slug) {
 			results, fetchErr := g.search(ctx, query)
 			if fetchErr != nil {
-				return nil, fetchErr
+				geocodingErr = fetchErr
+				break
 			}
+			resultSets = append(resultSets, results)
 			for _, place := range results {
 				if locationSlug(place, results) != slug {
 					continue
 				}
 				location := locationFromPlace(place)
+				location.CanonicalSlug = slug
 				if g.Cache != nil {
 					_ = g.Cache.Put(cacheKey, location, g.now().Add(30*24*time.Hour))
 				}
 				return location, nil
 			}
 		}
-		return nil, errors.New("location not found")
+
+		location, forwardErr := g.forward(ctx, slug, resultSets)
+		if forwardErr == nil {
+			if g.Cache != nil {
+				_ = g.Cache.Put(cacheKey, location, g.now().Add(30*24*time.Hour))
+			}
+			return location, nil
+		}
+		if geocodingErr != nil {
+			return nil, geocodingErr
+		}
+		return nil, forwardErr
 	})
 	if err != nil {
 		return Location{}, err
@@ -126,6 +170,80 @@ func (g *Geocoder) search(ctx context.Context, query string) ([]placeResult, err
 	return response.Results, nil
 }
 
+func (g *Geocoder) forward(
+	ctx context.Context,
+	slug string,
+	resultSets [][]placeResult,
+) (Location, error) {
+	if err := g.waitForNominatim(ctx); err != nil {
+		return Location{}, err
+	}
+
+	endpoint, err := url.Parse(g.ForwardURL)
+	if err != nil {
+		return Location{}, err
+	}
+	values := endpoint.Query()
+	values.Set("q", strings.ReplaceAll(slug, "-", " "))
+	values.Set("format", "geocodejson")
+	values.Set("addressdetails", "1")
+	values.Set("featureType", "settlement")
+	values.Set("limit", "5")
+	values.Set("accept-language", "en")
+	endpoint.RawQuery = values.Encode()
+
+	var response nominatimResponse
+	if err := g.HTTP.JSON(
+		ctx,
+		"Nominatim",
+		"GET",
+		endpoint.String(),
+		"",
+		nil,
+		&response,
+	); err != nil {
+		return Location{}, err
+	}
+
+	for _, feature := range response.Features {
+		if len(feature.Geometry.Coordinates) < 2 {
+			continue
+		}
+		place := feature.Properties.Geocoding
+		name := firstNonEmpty(
+			place.Name,
+			place.City,
+			place.Town,
+			place.Village,
+			place.Municipality,
+			place.Locality,
+		)
+		countryCode := strings.ToUpper(place.CountryCode)
+		longitude := feature.Geometry.Coordinates[0]
+		latitude := feature.Geometry.Coordinates[1]
+		if name == "" || countryCode == "" || !validCoordinates(latitude, longitude) {
+			continue
+		}
+
+		location := Location{
+			Name:        name,
+			Region:      firstNonEmpty(place.State, place.County, place.District),
+			Country:     firstNonEmpty(place.Country, countryCode),
+			CountryCode: countryCode,
+			Latitude:    latitude,
+			Longitude:   longitude,
+			Source:      "OpenStreetMap Nominatim",
+		}
+		location.CanonicalSlug = canonicalSlugForLocation(location, resultSets)
+		if location.CanonicalSlug == "" {
+			location.CanonicalSlug = slug
+		}
+		return location, nil
+	}
+
+	return Location{}, errors.New("location not found")
+}
+
 func (g *Geocoder) Reverse(ctx context.Context, latitude, longitude float64) (Location, error) {
 	if !validCoordinates(latitude, longitude) {
 		return Location{}, errors.New("invalid coordinates")
@@ -138,7 +256,7 @@ func (g *Geocoder) Reverse(ctx context.Context, latitude, longitude float64) (Lo
 	}
 
 	value, err, _ := g.group.Do(cacheKey, func() (any, error) {
-		if err := g.waitForReverse(ctx); err != nil {
+		if err := g.waitForNominatim(ctx); err != nil {
 			return nil, err
 		}
 
@@ -155,24 +273,7 @@ func (g *Geocoder) Reverse(ctx context.Context, latitude, longitude float64) (Lo
 		values.Set("accept-language", "en")
 		endpoint.RawQuery = values.Encode()
 
-		var response struct {
-			Features []struct {
-				Properties struct {
-					Geocoding struct {
-						City         string `json:"city"`
-						Country      string `json:"country"`
-						CountryCode  string `json:"country_code"`
-						District     string `json:"district"`
-						Locality     string `json:"locality"`
-						Municipality string `json:"municipality"`
-						Name         string `json:"name"`
-						State        string `json:"state"`
-						Town         string `json:"town"`
-						Village      string `json:"village"`
-					} `json:"geocoding"`
-				} `json:"properties"`
-			} `json:"features"`
-		}
+		var response nominatimResponse
 		if fetchErr := g.HTTP.JSON(ctx, "Nominatim", "GET", endpoint.String(), "", nil, &response); fetchErr != nil {
 			return nil, fetchErr
 		}
@@ -214,11 +315,11 @@ func (g *Geocoder) Reverse(ctx context.Context, latitude, longitude float64) (Lo
 	return value.(Location), nil
 }
 
-func (g *Geocoder) waitForReverse(ctx context.Context) error {
-	g.reverseMu.Lock()
-	defer g.reverseMu.Unlock()
+func (g *Geocoder) waitForNominatim(ctx context.Context) error {
+	g.nominatimMu.Lock()
+	defer g.nominatimMu.Unlock()
 
-	wait := g.ReverseDelay - time.Since(g.lastReverseAt)
+	wait := g.ReverseDelay - time.Since(g.lastNominatim)
 	if wait > 0 {
 		timer := time.NewTimer(wait)
 		defer timer.Stop()
@@ -228,7 +329,7 @@ func (g *Geocoder) waitForReverse(ctx context.Context) error {
 		case <-timer.C:
 		}
 	}
-	g.lastReverseAt = time.Now()
+	g.lastNominatim = time.Now()
 	return nil
 }
 
@@ -304,6 +405,28 @@ func locationSlug(place placeResult, candidates []placeResult) string {
 		return citySlug
 	}
 	return citySlug + "-" + region
+}
+
+func canonicalSlugForLocation(location Location, resultSets [][]placeResult) string {
+	locationName := slugify(location.Name)
+	locationRegion := slugify(location.Region)
+
+	for _, candidates := range resultSets {
+		for _, candidate := range candidates {
+			if !strings.EqualFold(candidate.CountryCode, location.CountryCode) ||
+				slugify(candidate.Name) != locationName {
+				continue
+			}
+			candidateRegion := slugify(firstNonEmpty(candidate.Admin1, candidate.Admin2))
+			if locationRegion != "" &&
+				candidateRegion != "" &&
+				locationRegion != candidateRegion {
+				continue
+			}
+			return locationSlug(candidate, candidates)
+		}
+	}
+	return ""
 }
 
 func validCoordinates(latitude, longitude float64) bool {
