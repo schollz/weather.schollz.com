@@ -60,8 +60,11 @@ func testServer(t *testing.T) (*Server, *fakeReporter, *fakeGeocoder, *fakeIPRes
 	t.Helper()
 	assets := fstest.MapFS{
 		"index.html":             {Data: []byte("<!doctype html><title>wthrtxt.com</title>")},
+		"about/index.html":       {Data: []byte("<!doctype html><title>About wthrtxt.com</title>")},
 		"assets/app-abc123.js":   {Data: []byte("console.log('ok')")},
 		"favicon.svg":            {Data: []byte("<svg></svg>")},
+		"og.png":                 {Data: []byte("social preview")},
+		"robots.txt":             {Data: []byte("User-agent: *")},
 		"assets/not-a-directory": {Data: []byte("ok")},
 	}
 	reporter := &fakeReporter{report: sampleServerReport()}
@@ -124,6 +127,15 @@ func TestNegotiatesBrowserAndTerminalResponses(t *testing.T) {
 		t.Fatal("browser request should not fetch server-side weather")
 	}
 
+	aboutRequest := httptest.NewRequest(http.MethodGet, "http://wthrtxt.com/about/", nil)
+	aboutRequest.Header.Set("Accept", "text/html")
+	aboutResponse := httptest.NewRecorder()
+	handler.ServeHTTP(aboutResponse, aboutRequest)
+	if aboutResponse.Code != http.StatusOK ||
+		!strings.Contains(aboutResponse.Body.String(), "About wthrtxt.com") {
+		t.Fatalf("unexpected about response: %d %q", aboutResponse.Code, aboutResponse.Body.String())
+	}
+
 	curlRequest := httptest.NewRequest(http.MethodGet, "http://wthrtxt.com/seattle", nil)
 	curlRequest.Header.Set("Accept", "*/*")
 	curlRequest.Header.Set("User-Agent", "curl/8.7.1")
@@ -167,6 +179,13 @@ func TestFormatOverrideAndStaticRoutes(t *testing.T) {
 	}
 	if !strings.Contains(assetResponse.Header().Get("Cache-Control"), "immutable") {
 		t.Fatalf("asset is missing immutable caching: %q", assetResponse.Header().Get("Cache-Control"))
+	}
+
+	ogRequest := httptest.NewRequest(http.MethodGet, "http://wthrtxt.com/og.png", nil)
+	ogResponse := httptest.NewRecorder()
+	handler.ServeHTTP(ogResponse, ogRequest)
+	if ogResponse.Code != http.StatusOK || ogResponse.Body.String() != "social preview" {
+		t.Fatalf("social preview was not served directly: %d %q", ogResponse.Code, ogResponse.Body.String())
 	}
 	if reporter.calls != 0 {
 		t.Fatal("static routes should not fetch weather")

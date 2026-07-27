@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+
+Host: https://wthrtxt.com
+Sitemap: https://wthrtxt.com/sitemap.xml

@@ -6,6 +6,7 @@ import {
   CloudLightning,
   CloudRain,
   CloudSun,
+  CircleHelp,
   Droplets,
   FileText,
   LocateFixed,
@@ -24,7 +25,6 @@ import {
   useEffect,
   useMemo,
   useState,
-  useSyncExternalStore,
 } from "react";
 import {
   locationSlugForPlace,
@@ -39,6 +39,8 @@ import {
   normalizeNoaaPrecipitation,
   remainingRainfallTotal,
 } from "./precipitation.mjs";
+import { SITE_NAME, SITE_URL } from "./site";
+import ThemeToggle from "./theme-toggle";
 
 const DISPLAY_HOURS = Array.from({ length: 18 }, (_, index) => index + 5);
 const SEATTLE = { latitude: 47.6062, longitude: -122.3321 };
@@ -62,12 +64,9 @@ const WEATHER_CACHE_KEY = "wx-weather-v1";
 const WEATHER_CACHE_TTL_MS = 60 * 60 * 1000;
 const LEGACY_LOCATION_QUERY_KEY = "location";
 const SEARCH_DEBOUNCE_MS = 350;
-const THEME_STORAGE_KEY = "wx-theme";
-const THEME_CHANGE_EVENT = "wx-theme-change";
 const NOAA_COUNTRY_CODES = new Set(["AS", "GU", "MP", "PR", "US", "VI"]);
 
 type LoadPhase = "locating" | "loading" | "ready" | "error";
-type Theme = "light" | "dark";
 type WeatherProvider = "noaa" | "open-meteo";
 type LocationSource = "open-meteo-geocoding" | "osm";
 
@@ -104,27 +103,6 @@ type LocationHint = {
   region: string;
   source: LocationSource;
 };
-
-function getStoredTheme(): Theme {
-  if (typeof window === "undefined") return "dark";
-  return window.localStorage.getItem(THEME_STORAGE_KEY) === "light"
-    ? "light"
-    : "dark";
-}
-
-function subscribeToTheme(onStoreChange: () => void) {
-  const handleStorage = (event: StorageEvent) => {
-    if (event.key === THEME_STORAGE_KEY) onStoreChange();
-  };
-
-  window.addEventListener("storage", handleStorage);
-  window.addEventListener(THEME_CHANGE_EVENT, onStoreChange);
-
-  return () => {
-    window.removeEventListener("storage", handleStorage);
-    window.removeEventListener(THEME_CHANGE_EVENT, onStoreChange);
-  };
-}
 
 function useTooltip() {
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
@@ -220,12 +198,6 @@ function useTooltip() {
   }, []);
 
   return tooltip;
-}
-
-function saveTheme(theme: Theme) {
-  window.localStorage.setItem(THEME_STORAGE_KEY, theme);
-  document.documentElement.dataset.theme = theme;
-  window.dispatchEvent(new Event(THEME_CHANGE_EVENT));
 }
 
 function readLegacySharedCoordinates() {
@@ -1151,6 +1123,65 @@ function updateMetadataElement(selector: string, content: string) {
   if (element) element.content = content;
 }
 
+function updateLocationJsonLd(
+  weather: WeatherData,
+  placeName: string,
+  title: string,
+  description: string,
+  canonicalUrl: string,
+) {
+  let script = document.querySelector<HTMLScriptElement>(
+    "#location-json-ld",
+  );
+  if (!script) {
+    script = document.createElement("script");
+    script.id = "location-json-ld";
+    script.type = "application/ld+json";
+    document.head.append(script);
+  }
+
+  script.text = JSON.stringify({
+    "@context": "https://schema.org",
+    "@id": `${canonicalUrl}#weather`,
+    "@type": "WebPage",
+    about: {
+      "@type": "Place",
+      address: {
+        "@type": "PostalAddress",
+        addressCountry: weather.locationHint?.countryCode ?? "",
+        addressRegion: weather.locationHint?.region || weather.state,
+      },
+      geo: {
+        "@type": "GeoCoordinates",
+        latitude: weather.coordinates.latitude,
+        longitude: weather.coordinates.longitude,
+      },
+      name: placeName,
+    },
+    description,
+    inLanguage: "en-US",
+    isPartOf: {
+      "@id": `${SITE_URL}/#website`,
+    },
+    mainEntity: {
+      "@id": `${SITE_URL}/#weather-app`,
+    },
+    name: title,
+    potentialAction: {
+      "@type": "ViewAction",
+      name: "View plaintext weather forecast",
+      target: `${canonicalUrl}?format=text`,
+    },
+    primaryImageOfPage: {
+      "@type": "ImageObject",
+      contentUrl: `${SITE_URL}/og.png`,
+      height: 909,
+      width: 1731,
+    },
+    url: canonicalUrl,
+  }).replace(/</g, "\\u003c");
+}
+
 function updateSharedLocation(weather: WeatherData, slug: string) {
   const url = new URL(window.location.href);
   url.pathname = `/${slug}/`;
@@ -1171,8 +1202,9 @@ function updateSharedLocation(weather: WeatherData, slug: string) {
   );
 
   const placeName = [weather.city, weather.state].filter(Boolean).join(", ");
-  const title = `${placeName} weather — wthrtxt.com`;
-  const description = `Current conditions, hourly weather, and a seven-day forecast for ${placeName}.`;
+  const title = `${placeName} Weather Forecast: Hourly & 7-Day | ${SITE_NAME}`;
+  const socialTitle = `${placeName} Weather Forecast — Current, Hourly & 7-Day`;
+  const description = `Get current weather in ${placeName}, including temperature, humidity, wind and rain, plus an hour-by-hour forecast, 7-day outlook and daily records.`;
   const canonicalUrl = new URL(`/${slug}/`, window.location.origin).href;
   const canonical = document.querySelector<HTMLLinkElement>(
     'link[rel="canonical"]',
@@ -1181,11 +1213,30 @@ function updateSharedLocation(weather: WeatherData, slug: string) {
   document.title = title;
   if (canonical) canonical.href = canonicalUrl;
   updateMetadataElement('meta[name="description"]', description);
-  updateMetadataElement('meta[property="og:title"]', title);
+  updateMetadataElement(
+    'meta[name="keywords"]',
+    `${placeName} weather, ${placeName} weather forecast, hourly weather, 7-day forecast, current conditions`,
+  );
+  updateMetadataElement('meta[property="og:title"]', socialTitle);
   updateMetadataElement('meta[property="og:description"]', description);
   updateMetadataElement('meta[property="og:url"]', canonicalUrl);
-  updateMetadataElement('meta[name="twitter:title"]', title);
+  updateMetadataElement(
+    'meta[property="og:image:alt"]',
+    `${placeName} local weather forecast on ${SITE_NAME}`,
+  );
+  updateMetadataElement('meta[name="twitter:title"]', socialTitle);
   updateMetadataElement('meta[name="twitter:description"]', description);
+  updateMetadataElement(
+    'meta[name="twitter:image:alt"]',
+    `${placeName} local weather forecast on ${SITE_NAME}`,
+  );
+  updateLocationJsonLd(
+    weather,
+    placeName,
+    title,
+    description,
+    canonicalUrl,
+  );
 }
 
 function resetSharedLocation() {
@@ -2280,16 +2331,7 @@ export default function WeatherClient() {
   const [climateStationName, setClimateStationName] = useState<string | null>(
     null,
   );
-  const theme = useSyncExternalStore(
-    subscribeToTheme,
-    getStoredTheme,
-    () => "dark",
-  );
   const tooltip = useTooltip();
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-  }, [theme]);
 
   const searchPlaces = useCallback(
     async (query: string, signal: AbortSignal) => {
@@ -2775,19 +2817,15 @@ export default function WeatherClient() {
             >
               <FileText aria-hidden="true" size={14} />
             </a>
-            <button
+            <ThemeToggle showTooltip />
+            <Link
+              aria-label="About wthrtxt.com"
               className="icon-button hover-tip header-tip"
-              type="button"
-              aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-              data-tooltip={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-              onClick={() => saveTheme(theme === "dark" ? "light" : "dark")}
+              data-tooltip="About wthrtxt.com"
+              href="/about/"
             >
-              {theme === "dark" ? (
-                <Sun aria-hidden="true" size={14} />
-              ) : (
-                <Moon aria-hidden="true" size={14} />
-              )}
-            </button>
+              <CircleHelp aria-hidden="true" size={14} />
+            </Link>
           </div>
         </div>
 

@@ -1,0 +1,16 @@
+{
+  "background_color": "#0d0d0d",
+  "description": "Get your local weather forecast with current conditions, hour-by-hour temperature, humidity and rain, a 7-day outlook, and record highs and lows worldwide.",
+  "display": "standalone",
+  "icons": [
+    {
+      "sizes": "any",
+      "src": "/favicon.svg",
+      "type": "image/svg+xml"
+    }
+  ],
+  "name": "wthrtxt.com — Local Weather Forecast",
+  "short_name": "wthrtxt",
+  "start_url": "/",
+  "theme_color": "#0d0d0d"
+}

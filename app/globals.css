@@ -462,6 +462,90 @@ a {
   color: var(--foreground);
 }
 
+.about-page {
+  padding: 26px 0 12px;
+}
+
+.about-page h1 {
+  max-width: 500px;
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.04em;
+  line-height: 1.28;
+}
+
+.about-lede {
+  max-width: 500px;
+  margin: 13px 0 27px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.about-page section {
+  padding: 20px 0;
+  border-top: 1px dashed var(--line);
+}
+
+.about-page section:last-child {
+  padding-bottom: 0;
+}
+
+.about-page h2 {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.about-page p {
+  max-width: 510px;
+  margin: 0;
+}
+
+.source-list {
+  display: grid;
+  gap: 9px;
+  margin: 14px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.source-list li {
+  display: grid;
+  grid-template-columns: minmax(190px, 1fr) 1.35fr;
+  gap: 16px;
+  align-items: baseline;
+}
+
+.source-list a {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  width: fit-content;
+  font-weight: 600;
+  text-underline-offset: 3px;
+}
+
+.source-list span,
+.about-note {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.about-page pre {
+  margin: 13px 0 0;
+  padding: 13px 14px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.8;
+}
+
 .text-button {
   display: inline-flex;
   gap: 6px;
@@ -570,6 +654,15 @@ a {
     gap: 12px;
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .about-page h1 {
+    font-size: 21px;
+  }
+
+  .source-list li {
+    grid-template-columns: 1fr;
+    gap: 0;
   }
 }
 
