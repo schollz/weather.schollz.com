@@ -2,10 +2,15 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
+	"math"
 	"mime"
 	"net"
 	"net/http"
@@ -16,8 +21,11 @@ import (
 	"strings"
 	"time"
 
+	"wthrtxt.com/internal/store"
 	"wthrtxt.com/internal/weather"
 )
+
+const browserWeatherCacheCookie = "wthrtxt_weather_cache"
 
 type Reporter interface {
 	Report(context.Context, weather.Location) (weather.WeatherReport, error)
@@ -40,6 +48,7 @@ type Server struct {
 	TrustProxyHeaders bool
 	Logger            *slog.Logger
 	Now               func() time.Time
+	BrowserCache      *store.Store
 	static            http.Handler
 }
 
@@ -62,12 +71,17 @@ func New(
 		TrustProxyHeaders: trustProxyHeaders,
 		Logger:            logger,
 		Now:               time.Now,
+		BrowserCache:      store.NewMemory(512),
 		static:            http.FileServer(http.FS(assets)),
 	}
 }
 
 func (s *Server) ServeHTTP(response http.ResponseWriter, request *http.Request) {
 	response.Header().Set("X-Content-Type-Options", "nosniff")
+	if request.URL.Path == "/api/weather-cache" {
+		s.serveBrowserWeatherCache(response, request)
+		return
+	}
 	if request.Method != http.MethodGet && request.Method != http.MethodHead {
 		response.Header().Set("Allow", "GET, HEAD")
 		s.writeTextError(response, request, http.StatusMethodNotAllowed, "method not allowed")
@@ -116,6 +130,241 @@ func (s *Server) serveBrowser(response http.ResponseWriter, request *http.Reques
 	}
 }
 
+type browserWeatherCacheRequest struct {
+	MaxAgeSeconds int                   `json:"max_age_seconds"`
+	Path          string                `json:"path"`
+	Report        weather.WeatherReport `json:"report"`
+}
+
+func (s *Server) serveBrowserWeatherCache(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	response.Header().Set("Cache-Control", "no-store")
+	if request.Method != http.MethodPost {
+		response.Header().Set("Allow", "POST")
+		s.writeTextError(response, request, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if s.BrowserCache == nil {
+		s.writeTextError(response, request, http.StatusServiceUnavailable, "browser cache is unavailable")
+		return
+	}
+
+	contentType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
+	if err != nil || contentType != "application/json" {
+		s.writeTextError(response, request, http.StatusUnsupportedMediaType, "content type must be application/json")
+		return
+	}
+
+	request.Body = http.MaxBytesReader(response, request.Body, 1<<20)
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	var payload browserWeatherCacheRequest
+	if err := decoder.Decode(&payload); err != nil {
+		s.writeTextError(response, request, http.StatusBadRequest, "invalid browser weather cache payload")
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		s.writeTextError(response, request, http.StatusBadRequest, "invalid browser weather cache payload")
+		return
+	}
+
+	cachePath, ok := normalizeBrowserWeatherPath(payload.Path)
+	if !ok || payload.MaxAgeSeconds < 1 || payload.MaxAgeSeconds > 60*60 {
+		s.writeTextError(response, request, http.StatusBadRequest, "invalid browser weather cache metadata")
+		return
+	}
+	if err := validateBrowserWeatherReport(payload.Report, s.Now()); err != nil {
+		s.writeTextError(response, request, http.StatusBadRequest, "invalid browser weather report")
+		return
+	}
+
+	session, ok := browserWeatherSession(request)
+	if !ok {
+		session, err = newBrowserWeatherSession()
+		if err != nil {
+			s.writeTextError(response, request, http.StatusServiceUnavailable, "browser cache is unavailable")
+			return
+		}
+	}
+
+	payload.Report.Location.CanonicalSlug = ""
+	payload.Report.LocationFromIP = false
+	payload.Report.RecordsSource = ""
+	payload.Report.RecordsState = ""
+	for index := range payload.Report.Daily {
+		payload.Report.Daily[index].Record = nil
+	}
+
+	expiresAt := s.Now().Add(time.Duration(payload.MaxAgeSeconds) * time.Second)
+	if err := s.BrowserCache.Put(
+		browserWeatherCacheKey(session, cachePath),
+		payload.Report,
+		expiresAt,
+	); err != nil {
+		s.writeTextError(response, request, http.StatusServiceUnavailable, "browser cache is unavailable")
+		return
+	}
+
+	http.SetCookie(response, &http.Cookie{
+		Name:     browserWeatherCacheCookie,
+		Value:    session,
+		Path:     "/",
+		MaxAge:   60 * 60,
+		Expires:  s.Now().Add(time.Hour),
+		HttpOnly: true,
+		Secure: request.TLS != nil ||
+			(s.TrustProxyHeaders &&
+				strings.EqualFold(request.Header.Get("X-Forwarded-Proto"), "https")),
+		SameSite: http.SameSiteLaxMode,
+	})
+	response.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) browserWeatherReport(
+	request *http.Request,
+) (weather.WeatherReport, bool) {
+	if s.BrowserCache == nil {
+		return weather.WeatherReport{}, false
+	}
+	session, ok := browserWeatherSession(request)
+	if !ok {
+		return weather.WeatherReport{}, false
+	}
+	cachePath, ok := normalizeBrowserWeatherPath(request.URL.EscapedPath())
+	if !ok {
+		return weather.WeatherReport{}, false
+	}
+
+	var report weather.WeatherReport
+	if !s.BrowserCache.Get(browserWeatherCacheKey(session, cachePath), &report) {
+		return weather.WeatherReport{}, false
+	}
+	return report, true
+}
+
+func browserWeatherSession(request *http.Request) (string, bool) {
+	cookie, err := request.Cookie(browserWeatherCacheCookie)
+	if err != nil || len(cookie.Value) != 32 {
+		return "", false
+	}
+	if _, err := hex.DecodeString(cookie.Value); err != nil {
+		return "", false
+	}
+	return cookie.Value, true
+}
+
+func newBrowserWeatherSession() (string, error) {
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(value), nil
+}
+
+func browserWeatherCacheKey(session, cachePath string) string {
+	return "browser-weather:" + session + ":" + cachePath
+}
+
+func normalizeBrowserWeatherPath(value string) (string, bool) {
+	decoded, err := url.PathUnescape(value)
+	if err != nil {
+		return "", false
+	}
+	trimmed := strings.Trim(decoded, "/")
+	if len(trimmed) > 100 || strings.Contains(trimmed, "/") {
+		return "", false
+	}
+	if trimmed == "" {
+		return "/", true
+	}
+	return "/" + trimmed + "/", true
+}
+
+func validateBrowserWeatherReport(
+	report weather.WeatherReport,
+	now time.Time,
+) error {
+	if report.Location.Latitude < -90 || report.Location.Latitude > 90 ||
+		report.Location.Longitude < -180 || report.Location.Longitude > 180 ||
+		!finite(report.Location.Latitude) || !finite(report.Location.Longitude) {
+		return errors.New("invalid coordinates")
+	}
+	if report.Location.TimeZone == "" {
+		return errors.New("missing timezone")
+	}
+	if _, err := time.LoadLocation(report.Location.TimeZone); err != nil {
+		return errors.New("invalid timezone")
+	}
+	if report.Provider != "NOAA" && report.Provider != "Open-Meteo" {
+		return errors.New("invalid provider")
+	}
+	if len(report.Hourly) == 0 || len(report.Hourly) > 200 ||
+		len(report.Daily) == 0 || len(report.Daily) > 14 {
+		return errors.New("invalid forecast length")
+	}
+	if !shortWeatherText(report.Location.Name, 200) ||
+		!shortWeatherText(report.Location.Region, 200) ||
+		!shortWeatherText(report.Location.Country, 200) ||
+		!shortWeatherText(report.Location.CountryCode, 8) ||
+		!shortWeatherText(report.Location.Source, 100) ||
+		!shortWeatherText(report.Current.Sky, 200) ||
+		!shortWeatherText(report.Current.Wind, 100) ||
+		!shortWeatherText(report.Current.Source, 40) ||
+		!shortWeatherText(report.StationID, 40) {
+		return errors.New("weather text is too long")
+	}
+	if !boundedFloat(report.Current.Temperature, -200, 200) ||
+		!boundedFloat(report.Current.Humidity, 0, 100) ||
+		(!report.Current.ObservedAt.IsZero() &&
+			!plausibleWeatherTime(report.Current.ObservedAt, now)) {
+		return errors.New("invalid current conditions")
+	}
+
+	for _, reading := range report.Hourly {
+		if !plausibleWeatherTime(reading.StartTime, now) ||
+			!plausibleWeatherTime(reading.EndTime, now) ||
+			!reading.EndTime.After(reading.StartTime) ||
+			!boundedFloat(reading.Temperature, -200, 200) ||
+			!boundedFloat(reading.Humidity, 0, 100) ||
+			!boundedFloat(reading.PrecipChance, 0, 100) ||
+			!boundedFloat(reading.PrecipInches, 0, 100) ||
+			!shortWeatherText(reading.Sky, 200) ||
+			!shortWeatherText(reading.ObservationKind, 40) {
+			return errors.New("invalid hourly forecast")
+		}
+	}
+	for _, daily := range report.Daily {
+		if !plausibleWeatherTime(daily.Date, now) ||
+			!boundedFloat(daily.High, -200, 200) ||
+			!boundedFloat(daily.Low, -200, 200) ||
+			!boundedFloat(daily.PrecipChance, 0, 100) ||
+			!shortWeatherText(daily.Sky, 200) {
+			return errors.New("invalid daily forecast")
+		}
+	}
+	return nil
+}
+
+func finite(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0)
+}
+
+func boundedFloat(value *float64, minimum, maximum float64) bool {
+	return value == nil ||
+		(finite(*value) && *value >= minimum && *value <= maximum)
+}
+
+func plausibleWeatherTime(value, now time.Time) bool {
+	return value.After(now.Add(-72*time.Hour)) &&
+		value.Before(now.Add(10*24*time.Hour))
+}
+
+func shortWeatherText(value string, maximum int) bool {
+	return len(value) <= maximum
+}
+
 func (s *Server) isStaticPath(requestPath string) bool {
 	clean := strings.TrimPrefix(path.Clean(requestPath), "/")
 	if clean == "." || clean == "" || clean == "index.html" {
@@ -142,6 +391,11 @@ func (s *Server) serveStatic(response http.ResponseWriter, request *http.Request
 }
 
 func (s *Server) serveTerminal(response http.ResponseWriter, request *http.Request) {
+	if report, found := s.browserWeatherReport(request); found {
+		s.writeTerminalReport(response, request, report, false, true)
+		return
+	}
+
 	location, fromIP, status, err := s.resolveLocation(request)
 	if err != nil {
 		s.writeTextError(response, request, status, err.Error())
@@ -171,8 +425,21 @@ func (s *Server) serveTerminal(response http.ResponseWriter, request *http.Reque
 	}
 	report.LocationFromIP = fromIP
 
+	s.writeTerminalReport(response, request, report, fromIP, false)
+}
+
+func (s *Server) writeTerminalReport(
+	response http.ResponseWriter,
+	request *http.Request,
+	report weather.WeatherReport,
+	fromIP bool,
+	fromBrowserCache bool,
+) {
 	response.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	if fromIP {
+	if fromBrowserCache {
+		response.Header().Set("Cache-Control", "private, no-store")
+		response.Header().Set("Vary", "User-Agent, Accept, Cookie")
+	} else if fromIP {
 		response.Header().Set("Cache-Control", "private, no-store")
 	} else {
 		response.Header().Set("Cache-Control", "public, max-age=300")

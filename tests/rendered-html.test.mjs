@@ -131,6 +131,12 @@ test("keeps worldwide weather requests and geolocation in the client app", async
   assert.match(page, /wx-open-meteo-records-v1/);
   assert.match(page, /wx-reverse-geocode-v1/);
   assert.match(page, /wx-forward-geocode-v1/);
+  assert.match(page, /WEATHER_CACHE_TTL_MS = 60 \* 60 \* 1000/);
+  assert.match(page, /cachedWeatherForCoordinates/);
+  assert.match(page, /cachedWeatherForPath\(window\.location\.pathname\)/);
+  assert.match(page, /fetch\("\/api\/weather-cache"/);
+  assert.match(page, /max_age_seconds: maxAgeSeconds/);
+  assert.match(page, /href="\?format=text"/);
   assert.match(page, /REVERSE_GEOCODE_CACHE_TTL_MS/);
   assert.match(page, /format", "geocodejson"/);
   assert.match(page, /zoom", "10"/);

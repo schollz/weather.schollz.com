@@ -1,7 +1,9 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -168,6 +170,76 @@ func TestFormatOverrideAndStaticRoutes(t *testing.T) {
 	}
 	if reporter.calls != 0 {
 		t.Fatal("static routes should not fetch weather")
+	}
+}
+
+func TestBrowserWeatherCacheWarmsTextViewForTheSameSession(t *testing.T) {
+	handler, reporter, geocoder, _ := testServer(t)
+	now := time.Now()
+	handler.Now = func() time.Time { return now }
+	report := sampleServerReport()
+	report.Location = geocoder.slugLocation
+	report.Current.ObservedAt = now
+	report.Hourly[0].StartTime = now
+	report.Hourly[0].EndTime = now.Add(time.Hour)
+	report.Daily[0].Date = now
+	body, err := json.Marshal(browserWeatherCacheRequest{
+		MaxAgeSeconds: 3600,
+		Path:          "/seattle/",
+		Report:        report,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cacheRequest := httptest.NewRequest(
+		http.MethodPost,
+		"http://wthrtxt.com/api/weather-cache",
+		bytes.NewReader(body),
+	)
+	cacheRequest.Header.Set("Content-Type", "application/json")
+	cacheResponse := httptest.NewRecorder()
+	handler.ServeHTTP(cacheResponse, cacheRequest)
+	if cacheResponse.Code != http.StatusNoContent {
+		t.Fatalf("unexpected cache status: %d %q", cacheResponse.Code, cacheResponse.Body.String())
+	}
+	cookies := cacheResponse.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != browserWeatherCacheCookie {
+		t.Fatalf("browser cache session cookie was not set: %#v", cookies)
+	}
+
+	textRequest := httptest.NewRequest(
+		http.MethodGet,
+		"http://wthrtxt.com/seattle?format=text",
+		nil,
+	)
+	textRequest.AddCookie(cookies[0])
+	textResponse := httptest.NewRecorder()
+	handler.ServeHTTP(textResponse, textRequest)
+	if textResponse.Code != http.StatusOK ||
+		!strings.Contains(textResponse.Body.String(), "Weather for Seattle, WA") {
+		t.Fatalf("unexpected cached text response: %d %q", textResponse.Code, textResponse.Body.String())
+	}
+	if reporter.calls != 0 || geocoder.slug != "" {
+		t.Fatalf("cached text view reached upstreams: reporter=%d slug=%q", reporter.calls, geocoder.slug)
+	}
+	if value := textResponse.Header().Get("Vary"); !strings.Contains(value, "Cookie") {
+		t.Fatalf("cached text response does not vary by cookie: %q", value)
+	}
+
+	otherSessionRequest := httptest.NewRequest(
+		http.MethodGet,
+		"http://wthrtxt.com/seattle?format=text",
+		nil,
+	)
+	otherSessionResponse := httptest.NewRecorder()
+	handler.ServeHTTP(otherSessionResponse, otherSessionRequest)
+	if otherSessionResponse.Code != http.StatusOK || reporter.calls != 1 {
+		t.Fatalf(
+			"uncached session did not use normal reporting: status=%d calls=%d",
+			otherSessionResponse.Code,
+			reporter.calls,
+		)
 	}
 }
 

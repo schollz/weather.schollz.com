@@ -7,6 +7,7 @@ import {
   CloudRain,
   CloudSun,
   Droplets,
+  FileText,
   LocateFixed,
   MapPin,
   Moon,
@@ -56,6 +57,8 @@ const OPEN_METEO_RECORD_CACHE_KEY = "wx-open-meteo-records-v1";
 const FORWARD_GEOCODE_CACHE_KEY = "wx-forward-geocode-v1";
 const REVERSE_GEOCODE_CACHE_KEY = "wx-reverse-geocode-v1";
 const REVERSE_GEOCODE_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const WEATHER_CACHE_KEY = "wx-weather-v1";
+const WEATHER_CACHE_TTL_MS = 60 * 60 * 1000;
 const LEGACY_LOCATION_QUERY_KEY = "location";
 const SEARCH_DEBOUNCE_MS = 350;
 const THEME_STORAGE_KEY = "wx-theme";
@@ -309,6 +312,13 @@ type WeatherData = {
   state: string;
   stationId: string | null;
   timeZone: string;
+};
+
+type WeatherCacheEntry = {
+  key: string;
+  paths: string[];
+  updatedAt: number;
+  weather: WeatherData;
 };
 
 type ClimateRecordValue = {
@@ -1186,6 +1196,251 @@ function resetSharedLocation() {
 
 function coordinateCacheKey(latitude: number, longitude: number) {
   return `${latitude.toFixed(3)},${longitude.toFixed(3)}`;
+}
+
+function normalizedWeatherPath(pathname: string) {
+  const trimmed = pathname.replace(/^\/+|\/+$/g, "");
+  return trimmed ? `/${trimmed}/` : "/";
+}
+
+function isWeatherData(value: unknown): value is WeatherData {
+  if (!value || typeof value !== "object") return false;
+
+  const weather = value as WeatherData;
+  return (
+    typeof weather.city === "string" &&
+    typeof weather.coordinates?.latitude === "number" &&
+    Number.isFinite(weather.coordinates.latitude) &&
+    typeof weather.coordinates?.longitude === "number" &&
+    Number.isFinite(weather.coordinates.longitude) &&
+    typeof weather.current === "object" &&
+    Array.isArray(weather.daily) &&
+    Array.isArray(weather.hourly) &&
+    Array.isArray(weather.observations) &&
+    (weather.provider === "noaa" || weather.provider === "open-meteo") &&
+    typeof weather.timeZone === "string"
+  );
+}
+
+function readWeatherCache() {
+  if (typeof window === "undefined") return [] as WeatherCacheEntry[];
+
+  try {
+    const value = JSON.parse(
+      window.localStorage.getItem(WEATHER_CACHE_KEY) ?? "[]",
+    );
+    if (!Array.isArray(value)) return [];
+
+    const now = Date.now();
+    return value.filter((entry): entry is WeatherCacheEntry => {
+      if (!entry || typeof entry !== "object") return false;
+
+      const candidate = entry as WeatherCacheEntry;
+      const age = now - candidate.updatedAt;
+      return (
+        typeof candidate.key === "string" &&
+        Array.isArray(candidate.paths) &&
+        candidate.paths.every((path) => typeof path === "string") &&
+        Number.isFinite(candidate.updatedAt) &&
+        age >= 0 &&
+        age < WEATHER_CACHE_TTL_MS &&
+        isWeatherData(candidate.weather)
+      );
+    });
+  } catch {
+    return [];
+  }
+}
+
+function cachedWeatherForCoordinates(latitude: number, longitude: number) {
+  const key = coordinateCacheKey(latitude, longitude);
+  return readWeatherCache().find((entry) => entry.key === key) ?? null;
+}
+
+function cachedWeatherForPath(pathname: string) {
+  const path = normalizedWeatherPath(pathname);
+  return readWeatherCache().find((entry) => entry.paths.includes(path)) ?? null;
+}
+
+function writeWeatherCache(
+  weather: WeatherData,
+  updatedAt: number,
+  pathname: string,
+) {
+  const key = coordinateCacheKey(
+    weather.coordinates.latitude,
+    weather.coordinates.longitude,
+  );
+  const path = normalizedWeatherPath(pathname);
+  const entries = readWeatherCache();
+  const existing = entries.find((entry) => entry.key === key);
+  const paths = [path, ...(existing?.paths ?? []).filter((value) => value !== path)];
+  const nextEntries = [
+    { key, paths, updatedAt, weather },
+    ...entries.filter((entry) => entry.key !== key),
+  ].slice(0, 8);
+
+  try {
+    window.localStorage.setItem(WEATHER_CACHE_KEY, JSON.stringify(nextEntries));
+  } catch {
+    // Forecasts still work when browser storage is unavailable or full.
+  }
+}
+
+function serverDailyForecasts(weather: WeatherData) {
+  const byDate = new Map<
+    string,
+    {
+      date: string;
+      high_f: number | null;
+      low_f: number | null;
+      precip_chance: number | null;
+      sky: string;
+    }
+  >();
+
+  weather.daily.forEach((period) => {
+    const date = new Date(period.startTime);
+    const key = localDateKey(date, weather.timeZone);
+    const daily = byDate.get(key) ?? {
+      date: date.toISOString(),
+      high_f: null,
+      low_f: null,
+      precip_chance: null,
+      sky: period.shortForecast,
+    };
+
+    if (period.isDaytime) {
+      daily.high_f = period.temperature;
+      daily.sky = period.shortForecast || daily.sky;
+    } else {
+      daily.low_f = period.temperature;
+    }
+
+    const precipitation = period.probabilityOfPrecipitation?.value ?? null;
+    if (
+      precipitation !== null &&
+      (daily.precip_chance === null ||
+        precipitation > daily.precip_chance)
+    ) {
+      daily.precip_chance = precipitation;
+    }
+    byDate.set(key, daily);
+  });
+
+  return Array.from(byDate.values()).slice(0, 7);
+}
+
+function serverWeatherReport(weather: WeatherData) {
+  const observationsByHour = new Map<string, StationObservation>();
+  weather.observations.forEach((observation) => {
+    const timestamp = new Date(observation.timestamp);
+    if (Number.isNaN(timestamp.getTime())) return;
+
+    const key = timestamp.toISOString().slice(0, 13);
+    const existing = observationsByHour.get(key);
+    if (isPreferredObservation(observation, existing)) {
+      observationsByHour.set(key, observation);
+    }
+  });
+
+  const hint = weather.locationHint;
+  const countryCode = hint?.countryCode ?? (weather.provider === "noaa" ? "US" : "");
+
+  return {
+    current: {
+      humidity: weather.current.humidity,
+      observed_at: weather.current.timestamp,
+      sky: weather.current.description,
+      source: weather.current.sourceLabel,
+      temperature_f: weather.current.temperatureF,
+      wind: weather.current.windSpeed,
+    },
+    daily: serverDailyForecasts(weather),
+    hourly: weather.hourly.map((period) => {
+      const start = new Date(period.startTime);
+      const observation = Number.isNaN(start.getTime())
+        ? undefined
+        : observationsByHour.get(start.toISOString().slice(0, 13));
+
+      return {
+        end_time: period.endTime,
+        humidity:
+          observation?.relativeHumidity.value ??
+          period.relativeHumidity?.value ??
+          null,
+        observation_kind: observation
+          ? observation.source === "estimated"
+            ? "estimated"
+            : "station"
+          : "",
+        observed: Boolean(observation),
+        precip_chance: period.probabilityOfPrecipitation?.value ?? null,
+        precip_inches: observation
+          ? observationPrecipitationInches(observation)
+          : (period.forecastPrecipitationInches ?? null),
+        sky: observation?.textDescription || period.shortForecast,
+        start_time: period.startTime,
+        temperature_f: observation
+          ? observationTemperatureFahrenheit(observation)
+          : period.temperature,
+      };
+    }),
+    location: {
+      country: hint?.country ?? countryCode,
+      country_code: countryCode,
+      latitude: weather.coordinates.latitude,
+      longitude: weather.coordinates.longitude,
+      name: weather.city,
+      region: hint?.region || weather.state,
+      source:
+        hint?.source === "osm"
+          ? "OpenStreetMap Nominatim"
+          : hint
+            ? "Open-Meteo geocoding"
+            : "coordinates",
+      time_zone: weather.timeZone,
+    },
+    provider: weather.provider === "noaa" ? "NOAA" : "Open-Meteo",
+    station_id: weather.stationId ?? undefined,
+  };
+}
+
+async function shareWeatherWithServer(
+  weather: WeatherData,
+  updatedAt: number,
+  pathname: string,
+) {
+  const maxAgeSeconds = Math.floor(
+    (updatedAt + WEATHER_CACHE_TTL_MS - Date.now()) / 1000,
+  );
+  if (maxAgeSeconds <= 0) return;
+
+  try {
+    await fetch("/api/weather-cache", {
+      body: JSON.stringify({
+        max_age_seconds: maxAgeSeconds,
+        path: normalizedWeatherPath(pathname),
+        report: serverWeatherReport(weather),
+      }),
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      keepalive: true,
+      method: "POST",
+    });
+  } catch {
+    // The browser forecast remains usable if server cache warming fails.
+  }
+}
+
+let serverWeatherShareQueue: Promise<void> = Promise.resolve();
+
+function cacheWeatherForCurrentPage(weather: WeatherData, updatedAt: number) {
+  const pathname = window.location.pathname;
+  writeWeatherCache(weather, updatedAt, pathname);
+  serverWeatherShareQueue = serverWeatherShareQueue.then(() =>
+    shareWeatherWithServer(weather, updatedAt, pathname),
+  );
 }
 
 function readForwardGeocodeCache() {
@@ -2077,6 +2332,7 @@ export default function WeatherClient() {
       longitude: number,
       locationHint: LocationHint | null = null,
       preferredSlug: string | null = null,
+      forceRefresh = false,
     ) => {
       setPhase("loading");
       setError("");
@@ -2087,19 +2343,31 @@ export default function WeatherClient() {
       setClimateStationName(null);
 
       try {
-        const result = await getWeatherForCoordinates(
-          latitude,
-          longitude,
-          locationHint,
-        );
+        const cached = forceRefresh
+          ? null
+          : cachedWeatherForCoordinates(latitude, longitude);
+        const result =
+          cached?.weather ??
+          (await getWeatherForCoordinates(
+            latitude,
+            longitude,
+            locationHint,
+          ));
+        const updatedAt = cached?.updatedAt ?? Date.now();
+
         setWeather(result);
         setPhase("ready");
 
         if (preferredSlug) {
           updateSharedLocation(result, preferredSlug);
+          cacheWeatherForCurrentPage(result, updatedAt);
         } else {
+          cacheWeatherForCurrentPage(result, updatedAt);
           void canonicalLocationSlug(result).then((slug) => {
-            if (slug) updateSharedLocation(result, slug);
+            if (slug) {
+              updateSharedLocation(result, slug);
+              cacheWeatherForCurrentPage(result, updatedAt);
+            }
           });
         }
       } catch (weatherError) {
@@ -2176,6 +2444,22 @@ export default function WeatherClient() {
       return;
     }
 
+    const cachedPage =
+      requestKey === 0
+        ? cachedWeatherForPath(window.location.pathname)
+        : null;
+    if (cachedPage) {
+      queueMicrotask(() => {
+        void loadCoordinates(
+          cachedPage.weather.coordinates.latitude,
+          cachedPage.weather.coordinates.longitude,
+          cachedPage.weather.locationHint,
+          sharedSlug,
+        );
+      });
+      return;
+    }
+
     if (sharedSlug) {
       queueMicrotask(() => {
         setPhase("loading");
@@ -2213,7 +2497,14 @@ export default function WeatherClient() {
     }
 
     navigator.geolocation.getCurrentPosition(
-      ({ coords }) => loadCoordinates(coords.latitude, coords.longitude),
+      ({ coords }) =>
+        loadCoordinates(
+          coords.latitude,
+          coords.longitude,
+          null,
+          null,
+          requestKey > 0,
+        ),
       (locationError) => {
         setError(readableError(locationError));
         setPhase("error");
@@ -2452,6 +2743,14 @@ export default function WeatherClient() {
             >
               <LocateFixed aria-hidden="true" size={14} />
             </button>
+            <a
+              aria-label="View text forecast"
+              className="icon-button hover-tip header-tip"
+              data-tooltip="View text forecast"
+              href="?format=text"
+            >
+              <FileText aria-hidden="true" size={14} />
+            </a>
             <button
               className="icon-button hover-tip header-tip"
               type="button"
