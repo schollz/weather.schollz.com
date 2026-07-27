@@ -167,10 +167,16 @@ export default function AboutPage() {
               <span>global forecasts and ERA5-Land record estimates</span>
             </li>
             <li>
+              <SourceLink href="https://github.com/komoot/photon">
+                OpenStreetMap Photon
+              </SourceLink>
+              <span>live place search</span>
+            </li>
+            <li>
               <SourceLink href="https://nominatim.org/release-docs/latest/api/Overview/">
                 OpenStreetMap Nominatim
               </SourceLink>
-              <span>place and coordinate lookup</span>
+              <span>location URL and coordinate lookup</span>
             </li>
             <li>
               <SourceLink href="https://dev.maxmind.com/geoip/geolite2-free-geolocation-data/">

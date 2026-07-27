@@ -12,8 +12,8 @@ The site uses your browser location or a worldwide place search to show current
 conditions, hourly details, and a seven-day forecast. Supported U.S. areas use
 NOAA forecasts and station observations plus ACIS daily temperature records.
 Everywhere else uses Open-Meteo forecasts and estimated ERA5-Land temperature
-records. Place search uses Open-Meteo, with cached OpenStreetMap Nominatim
-forward-search fallback for noncanonical place links and reverse lookup for raw
+records. Live place search uses OpenStreetMap Photon, with OpenStreetMap
+Nominatim used for noncanonical place links and reverse lookup for raw
 coordinates. Locations use readable, shareable URL slugs such as `/seattle/`
 and `/hillsboro-or/`; ambiguous U.S. city names include their state
 abbreviation. Inputs such as `/portland%20oregon/` resolve to the canonical

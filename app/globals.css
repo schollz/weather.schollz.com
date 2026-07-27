@@ -131,7 +131,6 @@ a {
 
 .search-input-row {
   display: grid;
-  grid-template-columns: 1fr auto;
   align-items: center;
   border: 1px solid var(--line);
 }
@@ -148,30 +147,6 @@ a {
 
 .search-input-row input::placeholder {
   color: var(--muted);
-}
-
-.search-submit {
-  display: grid;
-  align-self: stretch;
-  width: 34px;
-  border: 0;
-  border-left: 1px solid var(--line);
-  background: transparent;
-  color: var(--foreground);
-  cursor: pointer;
-  place-items: center;
-}
-
-.search-submit:hover,
-.search-submit:focus-visible {
-  background: color-mix(in srgb, var(--foreground) 7%, transparent);
-  outline: none;
-}
-
-.search-submit:disabled,
-.search-input-row input:disabled {
-  cursor: wait;
-  opacity: 0.55;
 }
 
 .search-hint {
@@ -319,6 +294,14 @@ a {
   flex-wrap: wrap;
 }
 
+.today-temperature-range {
+  display: flex;
+  gap: 22px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
 .current-fact-stack {
   display: grid;
   gap: 2px;
@@ -334,7 +317,8 @@ a {
   width: 100%;
 }
 
-.current-facts strong {
+.current-facts strong,
+.today-temperature-range strong {
   font-weight: 800;
 }
 

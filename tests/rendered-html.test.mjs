@@ -73,6 +73,7 @@ test("server-renders the concise about page and its SEO metadata", async () => {
   assert.match(html, /"@type":"AboutPage"/i);
   assert.match(html, /Local weather, minus the weather-site clutter\./i);
   assert.match(html, /NOAA \/ National Weather Service/i);
+  assert.match(html, /OpenStreetMap Photon/i);
   assert.match(html, /OpenStreetMap Nominatim/i);
   assert.match(html, /curl https:\/\/wthrtxt\.com\/seattle/i);
 });
@@ -114,16 +115,24 @@ test("keeps worldwide weather requests and geolocation in the client app", async
     /\.filter\(\s*\(place\) => place\.country_code === "US"/,
   );
   assert.match(page, /Search worldwide places/);
-  assert.match(page, /searchNominatimPlaces\(query, 6\)/);
+  assert.match(page, /https:\/\/photon\.komoot\.io\/api/);
+  assert.match(page, /searchPhotonPlaces\(query, 6, signal\)/);
+  assert.match(page, /url\.searchParams\.set\("osm_tag", "place"\)/);
   assert.match(page, /url\.searchParams\.set\("featureType", "settlement"\)/);
   assert.match(page, /PLACE_SEARCH_CACHE_TTL_MS/);
+  assert.match(page, /SEARCH_DEBOUNCE_MS = 350/);
+  assert.match(page, /controller\.abort\(\)/);
   assert.match(page, /OpenStreetMap contributors/);
   assert.match(page, /placeholder="Portland, Oregon"/);
+  assert.match(page, /<span>search<\/span>/);
+  assert.doesNotMatch(page, /Enter a place, then press Enter/);
   assert.match(page, /\[place\.admin2, place\.admin1, place\.country\]/);
   assert.match(page, /aria-label="Use current location"/);
+  assert.match(page, /aria-label="Today's high and low temperatures"/);
+  assert.match(page, /todayForecast\?\.high/);
+  assert.match(page, /todayForecast\?\.low/);
   assert.match(page, /event\.preventDefault\(\);\s+retryLocation\(\);/);
   assert.match(page, /window\.setTimeout/);
-  assert.doesNotMatch(page, /SEARCH_DEBOUNCE_MS/);
   assert.match(
     page,
     /document\.documentElement\.removeAttribute\("data-weather-cache"\)/,

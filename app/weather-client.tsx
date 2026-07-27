@@ -32,6 +32,7 @@ import {
   slugifyPlaceName,
 } from "./location-slugs.mjs";
 import { nominatimPlaceResults } from "./nominatim-places.mjs";
+import { photonPlaceResults } from "./photon-places.mjs";
 import {
   forecastPrecipitationForPeriod,
   formatForecastRainfall,
@@ -54,6 +55,7 @@ const NOMINATIM_SEARCH_URL =
   "https://nominatim.openstreetmap.org/search";
 const NOMINATIM_REVERSE_URL =
   "https://nominatim.openstreetmap.org/reverse";
+const PHOTON_SEARCH_URL = "https://photon.komoot.io/api";
 const OPEN_METEO_ARCHIVE_URL =
   "https://archive-api.open-meteo.com/v1/archive";
 const OPEN_METEO_FORECAST_URL =
@@ -62,8 +64,9 @@ const OPEN_METEO_RECORD_START_YEAR = 1950;
 const OPEN_METEO_RECORD_CONCURRENCY = 4;
 const OPEN_METEO_RECORD_CACHE_KEY = "wx-open-meteo-records-v1";
 const FORWARD_GEOCODE_CACHE_KEY = "wx-forward-geocode-v1";
-const PLACE_SEARCH_CACHE_KEY = "wx-place-search-v1";
+const PLACE_SEARCH_CACHE_KEY = "wx-place-search-v2";
 const PLACE_SEARCH_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const SEARCH_DEBOUNCE_MS = 350;
 const REVERSE_GEOCODE_CACHE_KEY = "wx-reverse-geocode-v1";
 const REVERSE_GEOCODE_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const AUTO_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
@@ -1603,9 +1606,10 @@ function queueNominatimRequest<T>(request: () => Promise<T>) {
   return run;
 }
 
-async function searchNominatimPlaces(
+async function searchPhotonPlaces(
   query: string,
   count: number,
+  signal: AbortSignal,
 ): Promise<PlaceResult[]> {
   const key = query.trim().toLocaleLowerCase("en");
   const cache = readPlaceSearchCache();
@@ -1617,32 +1621,27 @@ async function searchNominatimPlaces(
 
   if (cached) return cached.places.slice(0, count);
 
-  return queueNominatimRequest(async () => {
-    const url = new URL(NOMINATIM_SEARCH_URL);
-    url.searchParams.set("q", query.trim());
-    url.searchParams.set("format", "geocodejson");
-    url.searchParams.set("addressdetails", "1");
-    url.searchParams.set("featureType", "settlement");
-    url.searchParams.set("limit", String(count));
-    url.searchParams.set("accept-language", "en");
+  const url = new URL(PHOTON_SEARCH_URL);
+  url.searchParams.set("q", query.trim());
+  url.searchParams.set("limit", String(count));
+  url.searchParams.set("lang", "en");
+  url.searchParams.set("osm_tag", "place");
 
-    const response = await fetch(url, {
-      referrerPolicy: "strict-origin-when-cross-origin",
-    });
-    if (!response.ok) {
-      throw new Error(`Place search failed (${response.status})`);
-    }
-
-    const places = nominatimPlaceResults(
-      (await response.json()) as NominatimResponse,
-    ) as PlaceResult[];
-    const nextCache = [
-      { key, places, updatedAt: Date.now() },
-      ...cache.filter((entry) => entry.key !== key),
-    ];
-    writePlaceSearchCache(nextCache);
-    return places.slice(0, count);
+  const response = await fetch(url, {
+    referrerPolicy: "strict-origin-when-cross-origin",
+    signal,
   });
+  if (!response.ok) {
+    throw new Error(`Place search failed (${response.status})`);
+  }
+
+  const places = photonPlaceResults(await response.json()) as PlaceResult[];
+  const nextCache = [
+    { key, places, updatedAt: Date.now() },
+    ...cache.filter((entry) => entry.key !== key),
+  ];
+  writePlaceSearchCache(nextCache);
+  return places.slice(0, count);
 }
 
 async function forwardGeocodeSlug(slug: string): Promise<PlaceResult | null> {
@@ -2375,24 +2374,41 @@ export default function WeatherClient() {
   const tooltip = useTooltip();
 
   const searchPlaces = useCallback(
-    async (query: string) => {
+    async (query: string, signal: AbortSignal) => {
       setSearching(true);
       setSearchError("");
 
       try {
-        const results = await searchNominatimPlaces(query, 6);
+        const results = await searchPhotonPlaces(query, 6, signal);
+        if (signal.aborted) return;
 
         setPlaceResults(results);
         setSearchError(results.length ? "" : "No places found.");
       } catch {
+        if (signal.aborted) return;
         setPlaceResults([]);
         setSearchError("Place search is unavailable. Try again.");
       } finally {
-        setSearching(false);
+        if (!signal.aborted) setSearching(false);
       }
     },
     [],
   );
+
+  useEffect(() => {
+    const query = searchQuery.trim();
+    if (!searchOpen || query.length < 2) return;
+
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => {
+      void searchPlaces(query, controller.signal);
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [searchOpen, searchPlaces, searchQuery]);
 
   const loadCoordinates = useCallback(
     async (
@@ -2772,6 +2788,9 @@ export default function WeatherClient() {
       });
   }, [climateRecordKey, climateRecords, weather]);
 
+  const todayForecast =
+    sevenDay.find((forecast) => forecast.isToday) ?? null;
+
   const retryLocation = () => {
     resetSharedLocation();
     setSearchOpen(false);
@@ -2873,7 +2892,7 @@ export default function WeatherClient() {
             role="dialog"
           >
             <div className="search-heading">
-              <span>search worldwide weather</span>
+              <span>search</span>
               <button
                 aria-label="Close place search"
                 className="search-close"
@@ -2884,17 +2903,7 @@ export default function WeatherClient() {
               </button>
             </div>
 
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                const query = searchQuery.trim();
-                if (query.length < 2) {
-                  setSearchError("Enter at least two characters.");
-                  return;
-                }
-                void searchPlaces(query);
-              }}
-            >
+            <div>
               <label className="sr-only" htmlFor="place-query">
                 City, region, or country
               </label>
@@ -2902,7 +2911,6 @@ export default function WeatherClient() {
                 <input
                   autoComplete="off"
                   autoFocus
-                  disabled={searching}
                   id="place-query"
                   onChange={(event) => {
                     setSearchQuery(event.target.value);
@@ -2914,26 +2922,18 @@ export default function WeatherClient() {
                   type="search"
                   value={searchQuery}
                 />
-                <button
-                  aria-label="Search places"
-                  className="search-submit"
-                  disabled={searching || searchQuery.trim().length < 2}
-                  type="submit"
-                >
-                  <Search aria-hidden="true" size={14} />
-                </button>
               </div>
-            </form>
+            </div>
 
             <p aria-live="polite" className="search-hint">
               {searchError ||
                 (searching
                   ? "Searching..."
                   : searchQuery.trim().length === 1
-                    ? "Enter at least two characters."
+                    ? "Type at least two characters."
                     : placeResults.length
                       ? "Select a location."
-                      : "Enter a place, then press Enter.")}
+                      : "Type a city or place.")}
             </p>
 
             <p className="search-attribution">
@@ -3007,6 +3007,32 @@ export default function WeatherClient() {
                   {weather.current.description}
                 </span>
               </div>
+            </div>
+
+            <div
+              aria-label="Today's high and low temperatures"
+              className="today-temperature-range"
+            >
+              <span className="current-fact">
+                <Sun aria-hidden="true" size={14} />
+                high:{" "}
+                <strong>
+                  {todayForecast?.high === null ||
+                  todayForecast?.high === undefined
+                    ? "—"
+                    : `${Math.round(todayForecast.high)}°F`}
+                </strong>
+              </span>
+              <span className="current-fact">
+                <Moon aria-hidden="true" size={14} />
+                low:{" "}
+                <strong>
+                  {todayForecast?.low === null ||
+                  todayForecast?.low === undefined
+                    ? "—"
+                    : `${Math.round(todayForecast.low)}°F`}
+                </strong>
+              </span>
             </div>
 
             <div className="current-facts">
