@@ -117,7 +117,11 @@ func (s *Server) ServeHTTP(response http.ResponseWriter, request *http.Request) 
 }
 
 func (s *Server) serveBrowser(response http.ResponseWriter, request *http.Request) {
-	index, err := fs.ReadFile(s.Assets, "index.html")
+	indexPath := "index.html"
+	if strings.Trim(request.URL.Path, "/") == "about" {
+		indexPath = "about/index.html"
+	}
+	index, err := fs.ReadFile(s.Assets, indexPath)
 	if err != nil {
 		s.writeTextError(response, request, http.StatusServiceUnavailable, "browser application has not been built")
 		return
@@ -370,7 +374,7 @@ func (s *Server) isStaticPath(requestPath string) bool {
 	if clean == "." || clean == "" || clean == "index.html" {
 		return false
 	}
-	if !strings.HasPrefix(clean, "assets/") && clean != "favicon.svg" {
+	if clean == "404.html" || strings.HasSuffix(clean, ".rsc") {
 		return false
 	}
 	info, err := fs.Stat(s.Assets, clean)

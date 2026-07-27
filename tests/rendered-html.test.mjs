@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-async function render() {
+async function render(path = "/") {
   const serverUrl = new URL("../dist/server/index.js", import.meta.url);
   serverUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: handleRequest } = await import(serverUrl.href);
 
   return handleRequest(
-    new Request("http://localhost/", {
+    new Request(`http://localhost${path}`, {
       headers: { accept: "text/html" },
     }),
   );
@@ -22,7 +22,7 @@ test("server-renders the local worldwide weather app", async () => {
   const html = await response.text();
   assert.match(
     html,
-    /<title>wthrtxt\.com — local worldwide weather<\/title>/i,
+    /<title>Local Weather Forecast: Current, Hourly &amp; 7-Day \| wthrtxt\.com<\/title>/i,
   );
   assert.match(
     html,
@@ -30,14 +30,20 @@ test("server-renders the local worldwide weather app", async () => {
   );
   assert.match(
     html,
-    /<link href="\/favicon\.svg" rel="icon" type="image\/svg\+xml"/i,
+    /<link rel="icon" href="https:\/\/wthrtxt\.com\/favicon\.svg" type="image\/svg\+xml"/i,
   );
   assert.match(
     html,
-    /property="og:title" content="Local worldwide weather"/i,
+    /property="og:title" content="Local Weather Forecast — Current, Hourly &amp; 7-Day"/i,
   );
-  assert.match(html, /name="twitter:card" content="summary"/i);
+  assert.match(html, /property="og:image" content="https:\/\/wthrtxt\.com\/og\.png"/i);
+  assert.match(html, /name="twitter:card" content="summary_large_image"/i);
+  assert.match(
+    html,
+    /rel="manifest" href="https:\/\/wthrtxt\.com\/manifest\.webmanifest"/i,
+  );
   assert.match(html, /type="application\/ld\+json"/i);
+  assert.match(html, /"@type":"WebSite"/i);
   assert.match(html, /"@type":"WebApplication"/i);
   assert.match(
     html,
@@ -48,11 +54,29 @@ test("server-renders the local worldwide weather app", async () => {
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });
 
-test("keeps worldwide weather requests and geolocation in the client app", async () => {
-  const page = await readFile(
-    new URL("../app/weather-client.tsx", import.meta.url),
-    "utf8",
+test("server-renders the concise about page and its SEO metadata", async () => {
+  const response = await render("/about/");
+  assert.equal(response.status, 200);
+
+  const html = await response.text();
+  assert.match(html, /<title>About \| wthrtxt\.com<\/title>/i);
+  assert.match(
+    html,
+    /<link rel="canonical" href="https:\/\/wthrtxt\.com\/about\/"/i,
   );
+  assert.match(html, /property="og:title" content="About wthrtxt\.com"/i);
+  assert.match(html, /"@type":"AboutPage"/i);
+  assert.match(html, /Local weather, minus the weather-site clutter\./i);
+  assert.match(html, /NOAA \/ National Weather Service/i);
+  assert.match(html, /OpenStreetMap Nominatim/i);
+  assert.match(html, /curl https:\/\/wthrtxt\.com\/seattle/i);
+});
+
+test("keeps worldwide weather requests and geolocation in the client app", async () => {
+  const [page, themeToggle] = await Promise.all([
+    readFile(new URL("../app/weather-client.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/theme-toggle.tsx", import.meta.url), "utf8"),
+  ]);
 
   assert.match(page, /navigator\.geolocation\.getCurrentPosition/);
   assert.match(
@@ -87,8 +111,11 @@ test("keeps worldwide weather requests and geolocation in the client app", async
   assert.match(page, /SEARCH_DEBOUNCE_MS = 350/);
   assert.match(page, /window\.setTimeout/);
   assert.match(page, /controller\.abort\(\)/);
-  assert.match(page, /localStorage\.setItem\(THEME_STORAGE_KEY, theme\)/);
-  assert.match(page, /useSyncExternalStore/);
+  assert.match(
+    themeToggle,
+    /localStorage\.setItem\(THEME_STORAGE_KEY, theme\)/,
+  );
+  assert.match(themeToggle, /useSyncExternalStore/);
   assert.match(page, /https:\/\/api\.weather\.gov\/points\//);
   assert.match(page, /https:\/\/api\.open-meteo\.com\/v1\/forecast/);
   assert.match(page, /https:\/\/archive-api\.open-meteo\.com\/v1\/archive/);
@@ -146,6 +173,9 @@ test("keeps worldwide weather requests and geolocation in the client app", async
   assert.match(page, /fetch\("\/api\/weather-cache"/);
   assert.match(page, /max_age_seconds: maxAgeSeconds/);
   assert.match(page, /href="\?format=text"/);
+  assert.match(page, /href="\/about\/"/);
+  assert.match(page, /updateLocationJsonLd/);
+  assert.match(page, /Weather Forecast: Hourly & 7-Day/);
   assert.match(page, /REVERSE_GEOCODE_CACHE_TTL_MS/);
   assert.match(page, /format", "geocodejson"/);
   assert.match(page, /zoom", "10"/);
@@ -195,6 +225,8 @@ test("uses wthrtxt.com as the public product identity", async () => {
     [
       "../README.md",
       "../app/layout.tsx",
+      "../app/site.ts",
+      "../app/about/page.tsx",
       "../app/weather-client.tsx",
       "../package.json",
       "../public/favicon.svg",

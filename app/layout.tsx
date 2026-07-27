@@ -1,48 +1,87 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import {
+  ROOT_SOCIAL_TITLE,
+  ROOT_TITLE,
+  SITE_DESCRIPTION,
+  SITE_NAME,
+  SITE_URL,
+  SOCIAL_IMAGE,
+  siteJsonLd,
+} from "./site";
 
 export const dynamic = "force-static";
-
-const SITE_NAME = "wthrtxt.com";
-const SITE_URL = "https://wthrtxt.com";
-const DESCRIPTION =
-  "Local worldwide weather with current conditions, hourly details, seven-day forecasts, and daily temperature records from NOAA, ACIS, and Open-Meteo.";
 
 export const metadata: Metadata = {
   alternates: {
     canonical: "/",
   },
   applicationName: SITE_NAME,
-  description: DESCRIPTION,
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: SITE_NAME,
+  },
+  authors: [{ name: SITE_NAME, url: SITE_URL }],
+  category: "weather forecast",
+  creator: SITE_NAME,
+  description: SITE_DESCRIPTION,
+  formatDetection: {
+    address: false,
+    email: false,
+    telephone: false,
+  },
+  icons: {
+    icon: [{ type: "image/svg+xml", url: "/favicon.svg" }],
+    shortcut: ["/favicon.svg"],
+  },
   keywords: [
-    "weather",
-    "local weather",
-    "worldwide weather",
-    "NOAA",
-    "Open-Meteo",
+    "local weather forecast",
+    "current weather conditions",
     "hourly forecast",
-    "seven-day forecast",
-    "climate records",
+    "7-day weather forecast",
+    "worldwide weather forecast",
+    "temperature humidity rain",
+    "weather by curl",
+    "plaintext weather",
+    "NOAA weather",
+    "Open-Meteo weather",
+    "daily temperature records",
     "ACIS",
   ],
+  manifest: "/manifest.webmanifest",
   metadataBase: new URL(SITE_URL),
   openGraph: {
-    description: DESCRIPTION,
+    description: SITE_DESCRIPTION,
+    images: [SOCIAL_IMAGE],
     locale: "en_US",
     siteName: SITE_NAME,
-    title: "Local worldwide weather",
+    title: ROOT_SOCIAL_TITLE,
     type: "website",
     url: "/",
   },
+  publisher: SITE_NAME,
+  referrer: "origin-when-cross-origin",
   robots: {
     follow: true,
+    googleBot: {
+      follow: true,
+      index: true,
+      "max-image-preview": "large",
+      "max-snippet": -1,
+      "max-video-preview": -1,
+    },
     index: true,
   },
-  title: `${SITE_NAME} — local worldwide weather`,
+  title: {
+    default: ROOT_TITLE,
+    template: `%s | ${SITE_NAME}`,
+  },
   twitter: {
-    card: "summary",
-    description: DESCRIPTION,
-    title: "Local worldwide weather",
+    card: "summary_large_image",
+    description: SITE_DESCRIPTION,
+    images: [{ alt: SOCIAL_IMAGE.alt, url: SOCIAL_IMAGE.url }],
+    title: ROOT_SOCIAL_TITLE,
   },
 };
 
@@ -56,26 +95,6 @@ export const viewport: Viewport = {
   width: "device-width",
 };
 
-const jsonLd = {
-  "@context": "https://schema.org",
-  "@type": "WebApplication",
-  applicationCategory: "Weather",
-  browserRequirements: "Requires JavaScript",
-  description: DESCRIPTION,
-  featureList: [
-    "Current local weather",
-    "Hourly observations, estimates, and forecasts",
-    "Seven-day worldwide forecast",
-    "NOAA and ACIS data in supported U.S. areas",
-    "Open-Meteo forecasts and estimated records worldwide",
-    "Shareable locations",
-  ],
-  isAccessibleForFree: true,
-  name: SITE_NAME,
-  operatingSystem: "Any",
-  url: `${SITE_URL}/`,
-};
-
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -84,7 +103,6 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <link href="/favicon.svg" rel="icon" type="image/svg+xml" />
         <script
           dangerouslySetInnerHTML={{
             __html:
@@ -93,8 +111,9 @@ export default function RootLayout({
         />
         <script
           dangerouslySetInnerHTML={{
-            __html: JSON.stringify(jsonLd).replace(/</g, "\\u003c"),
+            __html: JSON.stringify(siteJsonLd).replace(/</g, "\\u003c"),
           }}
+          id="site-json-ld"
           type="application/ld+json"
         />
       </head>
