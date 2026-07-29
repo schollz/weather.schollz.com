@@ -1,4 +1,28 @@
-# wthrtxt.com
+<p align="center">
+  <a href="https://wthrtxt.com"><img
+    src="public/wthrtxt-graphic.png"
+    width="454"
+    alt="wthrtxt logo: weather with lines"
+  ></a>
+</p>
+
+<p align="center">local weather without the clutter</p>
+
+
+<p align="center">
+  <a href="https://github.com/schollz/wthrtxt/actions/workflows/ci.yml">
+    <img
+      src="https://github.com/schollz/wthrtxt/actions/workflows/ci.yml/badge.svg?branch=main"
+      alt="CI status"
+    >
+  </a>
+  <a href="https://github.com/schollz/wthrtxt/releases/latest">
+    <img
+      src="https://img.shields.io/github/v/release/schollz/wthrtxt"
+      alt="Latest release"
+    >
+  </a>
+</p>
 
 A minimal worldwide weather page powered by
 [NOAA](https://www.weather.gov/documentation/services-web-api) and
