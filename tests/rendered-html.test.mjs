@@ -64,6 +64,8 @@ test("server-renders the local worldwide weather app", async () => {
   assert.match(html, /fast, simple, secure file transfer/i);
   assert.match(html, /href="https:\/\/cowyo\.com"/i);
   assert.match(html, /write together, without the setup/i);
+  assert.match(html, /href="https:\/\/yesnotice\.com"/i);
+  assert.match(html, /yes\/no alerts when websites change/i);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });
 

@@ -9,6 +9,11 @@ const TOOLS = [
     href: "https://cowyo.com",
     name: "cowyo",
   },
+  {
+    description: "yes/no alerts when websites change",
+    href: "https://yesnotice.com",
+    name: "yesnotice",
+  },
 ];
 
 export default function ProjectFooter() {
