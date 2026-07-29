@@ -5,10 +5,11 @@ GEOLITE2_DB ?= GeoLite2-City.mmdb
 GEOLITE2_URL ?= https://raw.githubusercontent.com/wp-statistics/GeoLite2-City/master/GeoLite2-City.mmdb.gz
 GO ?= go
 NPM ?= npm
+AIR_VERSION ?= v1.65.1
 
 .DEFAULT_GOAL := build
 
-.PHONY: build assets run
+.PHONY: build assets run serve
 
 build: assets $(GEOLITE2_DB)
 	$(GO) build -o $(BINARY) ./cmd/wthrtxt
@@ -18,6 +19,12 @@ run: build
 	DATA_DIR="$(abspath $(DATA_DIR))" \
 		GEOLITE2_DB="$(abspath $(GEOLITE2_DB))" \
 		$(abspath $(BINARY))
+
+serve:
+	@if [ -n "$(DATA_DIR)" ]; then mkdir -p "$(DATA_DIR)"; fi
+	DATA_DIR="$(abspath $(DATA_DIR))" \
+		GEOLITE2_DB="$(abspath $(GEOLITE2_DB))" \
+		$(GO) run github.com/air-verse/air@$(AIR_VERSION) -c .air.toml
 
 assets:
 	@if [ ! -d node_modules ] || \

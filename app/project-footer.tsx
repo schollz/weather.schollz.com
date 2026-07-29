@@ -1,11 +1,11 @@
 const TOOLS = [
   {
-    description: "send files with croc",
+    description: "fast, simple, secure file transfer",
     href: "https://getcroc.com",
     name: "croc",
   },
   {
-    description: "write, read anywhere",
+    description: "write together, without the setup",
     href: "https://cowyo.com",
     name: "cowyo",
   },

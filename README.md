@@ -60,6 +60,13 @@ make
 make run
 ```
 
+For development, use Air to rebuild the frontend and Go server when source
+files change:
+
+```bash
+make serve
+```
+
 Useful checks:
 
 ```bash
