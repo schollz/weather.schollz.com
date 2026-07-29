@@ -22,6 +22,7 @@
       alt="Latest release"
     >
   </a>
+  <a href="https://github.com/sponsors/schollz"><img alt="GitHub Sponsors" src="https://img.shields.io/github/sponsors/schollz"></a>
 </p>
 
 A minimal worldwide weather page powered by
