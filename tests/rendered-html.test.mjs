@@ -56,6 +56,12 @@ test("server-renders the local worldwide weather app", async () => {
   );
   assert.match(html, /locating/);
   assert.match(html, /Finding your local weather/);
+  assert.match(html, /made by/i);
+  assert.match(html, /href="https:\/\/github\.com\/sponsors\/schollz"/i);
+  assert.match(html, /href="https:\/\/github\.com\/schollz\/wthrtxt"/i);
+  assert.match(html, /<summary>other tools<\/summary>/i);
+  assert.match(html, /href="https:\/\/getcroc\.com"/i);
+  assert.match(html, /href="https:\/\/cowyo\.com"/i);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });
 
@@ -76,6 +82,9 @@ test("server-renders the concise about page and its SEO metadata", async () => {
   assert.match(html, /OpenStreetMap Photon/i);
   assert.match(html, /OpenStreetMap Nominatim/i);
   assert.match(html, /curl https:\/\/wthrtxt\.com\/seattle/i);
+  assert.match(html, /href="https:\/\/github\.com\/sponsors\/schollz"/i);
+  assert.match(html, /href="https:\/\/github\.com\/schollz\/wthrtxt"/i);
+  assert.match(html, /<summary>other tools<\/summary>/i);
 });
 
 test("keeps worldwide weather requests and geolocation in the client app", async () => {

@@ -6,6 +6,7 @@ import {
   SITE_URL,
   SOCIAL_IMAGE,
 } from "../site";
+import ProjectFooter from "../project-footer";
 import ThemeToggle from "../theme-toggle";
 
 const ABOUT_DESCRIPTION =
@@ -204,6 +205,7 @@ curl 'https://wthrtxt.com/seattle?format=text'`}</code>
           </pre>
         </section>
       </article>
+      <ProjectFooter />
     </main>
   );
 }

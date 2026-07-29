@@ -479,6 +479,100 @@ a {
   color: var(--foreground);
 }
 
+.project-footer {
+  display: flex;
+  position: relative;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 28px;
+  padding-top: 13px;
+  border-top: 1px dashed var(--line);
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.project-footer a,
+.tools-menu summary {
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--muted) 55%, transparent);
+  text-underline-offset: 3px;
+}
+
+.project-footer a:hover,
+.project-footer a:focus-visible,
+.tools-menu summary:hover,
+.tools-menu summary:focus-visible {
+  color: var(--foreground);
+  outline: none;
+  text-decoration-color: currentcolor;
+}
+
+.project-footer-links {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.tools-menu {
+  position: relative;
+}
+
+.tools-menu summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.tools-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.tools-menu summary::before {
+  content: "+ ";
+}
+
+.tools-menu[open] summary::before {
+  content: "− ";
+}
+
+.tools-menu ul {
+  position: absolute;
+  z-index: 20;
+  right: 0;
+  bottom: calc(100% + 8px);
+  width: max-content;
+  min-width: 220px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--foreground);
+  background: var(--background);
+  box-shadow: 4px 4px 0
+    color-mix(in srgb, var(--foreground) 14%, transparent);
+  list-style: none;
+}
+
+.tools-menu li + li {
+  border-top: 1px dotted color-mix(in srgb, var(--line) 65%, transparent);
+}
+
+.tools-menu li a {
+  display: grid;
+  grid-template-columns: 54px 1fr;
+  gap: 10px;
+  padding: 7px 9px;
+  text-decoration: none;
+}
+
+.tools-menu li a:hover,
+.tools-menu li a:focus-visible {
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+
+.tools-menu strong {
+  color: var(--foreground);
+  font-weight: 600;
+}
+
 .about-page {
   padding: 26px 0 12px;
 }

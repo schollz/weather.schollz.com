@@ -52,6 +52,7 @@ import {
   formatWind,
   usesMetricUnits,
 } from "./units.mjs";
+import ProjectFooter from "./project-footer";
 
 const DISPLAY_HOURS = Array.from({ length: 18 }, (_, index) => index + 5);
 const SEATTLE = { latitude: 47.6062, longitude: -122.3321 };
@@ -3520,6 +3521,7 @@ export default function WeatherClient() {
           )}
         </section>
       )}
+      <ProjectFooter />
       {tooltip ? (
         <div
           className="tooltip-layer"
