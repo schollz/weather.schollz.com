@@ -5,7 +5,7 @@ export const ROOT_TITLE =
 export const ROOT_SOCIAL_TITLE =
   "Local Weather Forecast — Current, Hourly & 7-Day";
 export const SITE_DESCRIPTION =
-  "Get your local weather forecast with current conditions, hour-by-hour temperature, humidity and rain, a 7-day outlook, and record highs and lows worldwide.";
+  "Get your local weather forecast with current conditions, hour-by-hour temperature, humidity and rain, a 7-day outlook, and historical temperature records and averages worldwide.";
 export const SOCIAL_IMAGE = {
   alt: "wthrtxt.com local weather, plain text — current, hourly and 7-day forecasts",
   height: 909,
@@ -51,7 +51,7 @@ export const siteJsonLd = {
         "Current local weather conditions",
         "Hour-by-hour temperature, humidity, wind and rain",
         "Seven-day local and worldwide weather forecast",
-        "Observed and estimated daily temperature records",
+        "Observed and estimated daily temperature records and historical averages",
         "Readable, shareable location URLs",
         "Plaintext weather forecasts for curl and terminals",
       ],

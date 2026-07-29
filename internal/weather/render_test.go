@@ -17,7 +17,7 @@ func TestRenderTextGolden(t *testing.T) {
 	temperature, nextTemperature := 60.0, 61.0
 	humidity, nextHumidity := 85.0, 84.0
 	rain, nextRain := 2.0, 3.0
-	high, low := 79.0, 58.0
+	high, low, average := 79.0, 58.0, 65.0
 
 	report := WeatherReport{
 		Location: Location{
@@ -43,8 +43,9 @@ func TestRenderTextGolden(t *testing.T) {
 			{
 				Date: now, High: &high, Low: &low, PrecipChance: &rain, Sky: "Cloudy",
 				Record: &ClimateRecord{
-					High: &ClimateValue{Date: "1965-07-27", Temperature: 96},
-					Low:  &ClimateValue{Date: "1948-07-27", Temperature: 49},
+					High:    &ClimateValue{Date: "1965-07-27", Temperature: 96},
+					Low:     &ClimateValue{Date: "1948-07-27", Temperature: 49},
+					Average: &ClimateValue{Temperature: average},
 				},
 			},
 			{
@@ -93,7 +94,7 @@ func TestRenderTextShowsWarmingAndObservedRain(t *testing.T) {
 		LocationFromIP: true,
 	}
 	rendered := RenderText(report, now)
-	if !strings.Contains(rendered, "<.01in") ||
+	if !strings.Contains(rendered, "0.2mm") ||
 		!strings.Contains(rendered, "records: warming; retry shortly") {
 		t.Fatalf("missing rainfall or warming state:\n%s", rendered)
 	}
@@ -101,6 +102,53 @@ func TestRenderTextShowsWarmingAndObservedRain(t *testing.T) {
 		if utf8.RuneCountInString(line) > 80 {
 			t.Fatalf("line exceeds 80 columns (%d): %q", utf8.RuneCountInString(line), line)
 		}
+	}
+}
+
+func TestRenderTextUsesMetricUnitsOutsideTheUnitedStates(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	temperature := 68.0
+	rain := 0.25
+	high, low := 77.0, 50.0
+	report := WeatherReport{
+		Location: Location{
+			Name: "Vancouver", Country: "Canada", CountryCode: "CA",
+			TimeZone: "UTC", Latitude: 49.2827, Longitude: -123.1207,
+		},
+		Current: CurrentConditions{
+			ObservedAt: now, Temperature: &temperature, Wind: "5 to 10 mph",
+		},
+		Hourly: []HourlyReading{{
+			StartTime: now, EndTime: now.Add(time.Hour), Temperature: &temperature,
+			Observed: true, PrecipInches: &rain, Sky: "Rain",
+		}},
+		Daily: []DailyForecast{{
+			Date: now, High: &high, Low: &low, Sky: "Rain",
+			Record: &ClimateRecord{
+				High: &ClimateValue{Date: "2009-07-27", Temperature: 86},
+				Low:  &ClimateValue{Date: "1962-07-27", Temperature: 41},
+			},
+		}},
+		Provider: "Open-Meteo",
+	}
+
+	rendered := RenderText(report, now)
+	for _, expected := range []string{
+		"temp       20°C",
+		"wind       8 to 16 km/h",
+		"6.3mm",
+		"rainfall (mm)",
+		"25°C",
+		"10°C",
+		"30°C",
+		"5°C",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("metric forecast is missing %q:\n%s", expected, rendered)
+		}
+	}
+	if strings.Contains(rendered, "°F") || strings.Contains(rendered, "in.)") {
+		t.Fatalf("metric forecast contains U.S. units:\n%s", rendered)
 	}
 }
 

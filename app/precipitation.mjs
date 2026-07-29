@@ -185,8 +185,16 @@ export function remainingRainfallTotal(
 
 /**
  * @param {number} value
+ * @param {boolean} [metric]
  */
-export function formatRainfallInches(value) {
+export function formatRainfallInches(value, metric = false) {
+  if (metric) {
+    const millimeters = value * 25.4;
+    return millimeters > 0 && millimeters < 0.1
+      ? "<0.1 mm"
+      : `${millimeters.toFixed(1)} mm`;
+  }
+
   return value > 0 && value < 0.01
     ? "<0.01 in."
     : `${value.toFixed(2)} in.`;
@@ -194,25 +202,31 @@ export function formatRainfallInches(value) {
 
 /**
  * @param {number | null} amount
+ * @param {boolean} [metric]
  */
-export function formatObservedRainfall(amount) {
+export function formatObservedRainfall(amount, metric = false) {
   return amount === null || !Number.isFinite(amount) || amount <= 0
     ? "—"
-    : formatRainfallInches(amount);
+    : formatRainfallInches(amount, metric);
 }
 
 /**
  * @param {number | null} probability
  * @param {number | null} amount
+ * @param {boolean} [metric]
  */
-export function formatForecastRainfall(probability, amount) {
+export function formatForecastRainfall(
+  probability,
+  amount,
+  metric = false,
+) {
   const probabilityText =
     probability === null || !Number.isFinite(probability)
       ? null
       : `${Math.round(probability)}%`;
   const amountText =
     amount !== null && Number.isFinite(amount) && amount > 0
-      ? formatRainfallInches(amount)
+      ? formatRainfallInches(amount, metric)
       : null;
 
   if (probabilityText && amountText) {

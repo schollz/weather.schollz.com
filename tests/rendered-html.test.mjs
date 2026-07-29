@@ -79,7 +79,8 @@ test("server-renders the concise about page and its SEO metadata", async () => {
 });
 
 test("keeps worldwide weather requests and geolocation in the client app", async () => {
-  const [page, themeToggle, styles, cacheBootstrap] = await Promise.all([
+  const [page, themeToggle, styles, cacheBootstrap, units] =
+    await Promise.all([
     readFile(new URL("../app/weather-client.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/theme-toggle.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
@@ -87,6 +88,7 @@ test("keeps worldwide weather requests and geolocation in the client app", async
       new URL("../app/weather-cache-bootstrap.mjs", import.meta.url),
       "utf8",
     ),
+    readFile(new URL("../app/units.mjs", import.meta.url), "utf8"),
   ]);
 
   assert.match(page, /navigator\.geolocation\.getCurrentPosition/);
@@ -178,14 +180,18 @@ test("keeps worldwide weather requests and geolocation in the client app", async
   assert.match(page, /groupby: "year"/);
   assert.match(page, /smry: \{ reduce: "max", add: "date" \}/);
   assert.match(page, /smry: \{ reduce: "min", add: "date" \}/);
+  assert.match(page, /name: "avgt"/);
+  assert.match(page, /smry: "mean"/);
   assert.match(page, /Record \$\{kind\}:/);
   assert.match(page, /Estimated record \$\{kind\}:/);
+  assert.match(page, /Historical average:/);
+  assert.match(page, /Estimated historical average:/);
   assert.match(page, /models", "era5_land"/);
   assert.match(page, /OPEN_METEO_RECORD_START_YEAR = 1950/);
   assert.match(page, /OPEN_METEO_RECORD_CONCURRENCY = 4/);
   assert.match(page, /historicalWindowForYear/);
   assert.match(page, /isValidUtcDate/);
-  assert.match(page, /wx-open-meteo-records-v1/);
+  assert.match(page, /wx-open-meteo-records-v2/);
   assert.match(page, /wx-reverse-geocode-v1/);
   assert.match(page, /wx-forward-geocode-v1/);
   assert.match(page, /AUTO_REFRESH_INTERVAL_MS = 30 \* 60 \* 1000/);
@@ -217,6 +223,7 @@ test("keeps worldwide weather requests and geolocation in the client app", async
   assert.match(page, /© OpenStreetMap contributors/);
   assert.match(page, /rec hi/);
   assert.match(page, /rec lo/);
+  assert.match(page, /rec avg/);
   assert.match(page, /isToday: dateKey === today/);
   assert.match(page, /className=\{forecast\.isToday \? "today" : undefined\}/);
   assert.match(page, /maximumPrecipitationChance/);
@@ -227,7 +234,7 @@ test("keeps worldwide weather requests and geolocation in the client app", async
   );
   assert.match(page, /cumulativeObservedRainfall/);
   assert.match(page, /todayRainfall !== null && todayRainfall > 0\.1/);
-  assert.match(page, /rainfall: <strong>/);
+  assert.match(page, /rainfall:\{" "\}\s*<strong>/);
   assert.match(page, /Highest rain chance:/);
   assert.match(
     page,
@@ -250,6 +257,11 @@ test("keeps worldwide weather requests and geolocation in the client app", async
   assert.match(page, /DISPLAY_HOURS/);
   assert.match(page, /estimated 1h precipitation/);
   assert.match(page, /weather\.current\.windSpeed/);
+  assert.match(page, /usesMetricUnits/);
+  assert.match(page, /formatTemperature/);
+  assert.match(page, /formatRainfallInches\(rainfallForecast, metricUnits\)/);
+  assert.match(page, /metricUnits \? "mm" : "in\."/);
+  assert.match(units, /US_COUNTRY_CODES/);
   assert.match(page, /Open-Meteo ERA5-Land/);
   assert.match(page, /contacting weather services/);
 });

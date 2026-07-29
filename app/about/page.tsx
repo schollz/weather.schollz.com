@@ -132,7 +132,7 @@ export default function AboutPage() {
         <p className="about-lede">
           wthrtxt.com is a small, free weather reader for current conditions,
           hour-by-hour details, seven-day forecasts, rainfall, and daily
-          temperature records.
+          temperature records and historical averages.
         </p>
 
         <section>
@@ -158,13 +158,13 @@ export default function AboutPage() {
               <SourceLink href="https://docs.rcc-acis.org/acisws/">
                 ACIS
               </SourceLink>
-              <span>U.S. station climate records</span>
+              <span>U.S. station climate records and averages</span>
             </li>
             <li>
               <SourceLink href="https://open-meteo.com/en/docs">
                 Open-Meteo
               </SourceLink>
-              <span>global forecasts and ERA5-Land record estimates</span>
+              <span>global forecasts and ERA5-Land climate estimates</span>
             </li>
             <li>
               <SourceLink href="https://github.com/komoot/photon">
@@ -186,8 +186,8 @@ export default function AboutPage() {
             </li>
           </ul>
           <p className="about-note">
-            Open-Meteo past-hour values and ERA5-Land records are model-based
-            estimates, not official station observations.
+            Open-Meteo past-hour values and ERA5-Land climate history are
+            model-based estimates, not official station observations.
           </p>
         </section>
 

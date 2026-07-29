@@ -53,6 +53,10 @@ func (r *RecordsClient) ACIS(ctx context.Context, stationID string) (recordsPayl
 				"smry":      map[string]string{"reduce": "min", "add": "date"},
 				"smry_only": 1, "groupby": "year",
 			},
+			{
+				"name": "avgt", "interval": "dly", "duration": "dly",
+				"smry": "mean", "smry_only": 1, "groupby": "year",
+			},
 		},
 	}
 	encodedParameters, err := json.Marshal(parameters)
@@ -87,6 +91,9 @@ func (r *RecordsClient) ACIS(ctx context.Context, stationID string) (recordsPayl
 	}
 	if len(response.Smry) > 1 {
 		addACISSummaries(records, response.Smry[1], false)
+	}
+	if len(response.Smry) > 2 {
+		addACISAverages(records, response.Smry[2])
 	}
 	if len(records) == 0 {
 		return recordsPayload{}, errors.New("ACIS returned no usable records")
@@ -134,6 +141,32 @@ func addACISSummaries(records map[string]ClimateRecord, raw json.RawMessage, hig
 		} else if record.Low == nil || value.Temperature < record.Low.Temperature {
 			record.Low = value
 		}
+		records[key] = record
+	}
+}
+
+func addACISAverages(records map[string]ClimateRecord, raw json.RawMessage) {
+	var summaries []json.RawMessage
+	if json.Unmarshal(raw, &summaries) != nil {
+		return
+	}
+	for index, rawSummary := range summaries {
+		if index >= 366 {
+			break
+		}
+		var temperatureValue any
+		if json.Unmarshal(rawSummary, &temperatureValue) != nil {
+			continue
+		}
+		temperature, ok := numberFromJSON(temperatureValue)
+		if !ok {
+			continue
+		}
+
+		date := time.Date(2000, time.January, 1+index, 0, 0, 0, 0, time.UTC)
+		key := date.Format("01-02")
+		record := records[key]
+		record.Average = &ClimateValue{Temperature: temperature}
 		records[key] = record
 	}
 }
@@ -188,23 +221,46 @@ func (r *RecordsClient) ERA5(
 
 	coverage := fmt.Sprintf("%d–%d", recordStartYear, throughYear)
 	records := make(map[string]ClimateRecord)
+	type averageAccumulator struct {
+		count int
+		sum   float64
+	}
+	averages := make(map[string]averageAccumulator)
 	for index, date := range response.Daily.Time {
 		if len(date) != 10 {
 			continue
 		}
 		key := date[5:]
 		record := records[key]
-		if high := valueAt(response.Daily.TemperatureMax, index); high != nil &&
-			(record.High == nil || *high > record.High.Temperature) {
+		high := valueAt(response.Daily.TemperatureMax, index)
+		low := valueAt(response.Daily.TemperatureMin, index)
+		if high != nil && (record.High == nil || *high > record.High.Temperature) {
 			record.High = &ClimateValue{
 				Date: date, Temperature: *high, Estimated: true, Coverage: coverage,
 			}
 		}
-		if low := valueAt(response.Daily.TemperatureMin, index); low != nil &&
-			(record.Low == nil || *low < record.Low.Temperature) {
+		if low != nil && (record.Low == nil || *low < record.Low.Temperature) {
 			record.Low = &ClimateValue{
 				Date: date, Temperature: *low, Estimated: true, Coverage: coverage,
 			}
+		}
+		if high != nil && low != nil {
+			average := averages[key]
+			average.sum += (*high + *low) / 2
+			average.count++
+			averages[key] = average
+		}
+		records[key] = record
+	}
+	for key, average := range averages {
+		if average.count == 0 {
+			continue
+		}
+		record := records[key]
+		record.Average = &ClimateValue{
+			Temperature: average.sum / float64(average.count),
+			Estimated:   true,
+			Coverage:    coverage,
 		}
 		records[key] = record
 	}

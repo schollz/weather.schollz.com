@@ -20,9 +20,9 @@ Monday, Jul 27
 ============================================================
 7-day forecast
 
-day       sky                   high   low  rec hi  rec lo  rain
-Mon 7/27  Cloudy                79°F  58°F    96°F    49°F    2%
-Tue 7/28  Partly cloudy         79°F  58°F       —       —    3%
+day       sky                   high   low  rec hi  rec lo rec avg  rain
+Mon 7/27  Cloudy                79°F  58°F    96°F    49°F    65°F    2%
+Tue 7/28  Partly cloudy         79°F  58°F       —       —       —    3%
 
 location: 47.606, -122.332 / America/Los_Angeles
 data: NOAA

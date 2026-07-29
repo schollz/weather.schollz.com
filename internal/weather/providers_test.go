@@ -123,7 +123,8 @@ func TestRecordProviderFixtures(t *testing.T) {
 		response.Header().Set("Content-Type", "application/json")
 		switch request.URL.Path {
 		case "/acis":
-			_, _ = response.Write([]byte(`{"meta":{"name":"BOEING FIELD"},"smry":[[["96","1965-07-27"],["101","1994-07-28"]],[["49","1948-07-27"],["50","1950-07-28"]]]}`))
+			averages := strings.Repeat(`"M",`, 208) + `"65"`
+			_, _ = fmt.Fprintf(response, `{"meta":{"name":"BOEING FIELD"},"smry":[[["96","1965-07-27"],["101","1994-07-28"]],[["49","1948-07-27"],["50","1950-07-28"]],[%s]]}`, averages)
 		case "/archive":
 			if request.URL.Query().Get("start_date") != "1950-01-01" ||
 				request.URL.Query().Get("models") != "era5_land" {
@@ -146,6 +147,7 @@ func TestRecordProviderFixtures(t *testing.T) {
 	}
 	if acis.Records["07-27"].High.Temperature != 96 ||
 		acis.Records["07-27"].Low.Temperature != 49 ||
+		acis.Records["07-27"].Average.Temperature != 65 ||
 		acis.Source != "ACIS / BOEING FIELD" {
 		t.Fatalf("unexpected ACIS records: %#v", acis)
 	}
@@ -158,6 +160,7 @@ func TestRecordProviderFixtures(t *testing.T) {
 	}
 	record := era.Records["07-27"]
 	if record.High.Temperature != 85 || record.Low.Temperature != 45 ||
+		record.Average.Temperature != 65 ||
 		!record.High.Estimated || !strings.Contains(era.Source, "1950–2025") {
 		t.Fatalf("unexpected ERA5 records: %#v", era)
 	}

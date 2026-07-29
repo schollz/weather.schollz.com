@@ -335,7 +335,7 @@ a {
 .daily-labels,
 .daily-list li {
   display: grid;
-  grid-template-columns: 76px 28px 46px 46px 48px 48px 1fr;
+  grid-template-columns: 76px 28px 46px 46px 48px 48px 48px 1fr;
   align-items: center;
 }
 
@@ -658,7 +658,7 @@ a {
 
   .daily-labels,
   .daily-list li {
-    grid-template-columns: 59px 20px 34px 34px 38px 38px 1fr;
+    grid-template-columns: 59px 20px 34px 34px 38px 38px 38px 1fr;
     font-size: 9px;
   }
 

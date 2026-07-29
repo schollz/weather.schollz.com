@@ -47,6 +47,11 @@ import {
   WEATHER_CACHE_KEY,
   WEATHER_CACHE_TTL_MS,
 } from "./weather-cache-bootstrap.mjs";
+import {
+  formatTemperature,
+  formatWind,
+  usesMetricUnits,
+} from "./units.mjs";
 
 const DISPLAY_HOURS = Array.from({ length: 18 }, (_, index) => index + 5);
 const SEATTLE = { latitude: 47.6062, longitude: -122.3321 };
@@ -62,7 +67,7 @@ const OPEN_METEO_FORECAST_URL =
   "https://api.open-meteo.com/v1/forecast";
 const OPEN_METEO_RECORD_START_YEAR = 1950;
 const OPEN_METEO_RECORD_CONCURRENCY = 4;
-const OPEN_METEO_RECORD_CACHE_KEY = "wx-open-meteo-records-v1";
+const OPEN_METEO_RECORD_CACHE_KEY = "wx-open-meteo-records-v2";
 const FORWARD_GEOCODE_CACHE_KEY = "wx-forward-geocode-v1";
 const PLACE_SEARCH_CACHE_KEY = "wx-place-search-v2";
 const PLACE_SEARCH_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -308,7 +313,15 @@ type ClimateRecordValue = {
   temperatureF: number;
 };
 
+type ClimateAverageValue = {
+  coverage?: string;
+  estimated?: boolean;
+  sampleCount?: number;
+  temperatureF: number;
+};
+
 type ClimateRecord = {
+  average: ClimateAverageValue | null;
   high: ClimateRecordValue | null;
   low: ClimateRecordValue | null;
 };
@@ -1778,7 +1791,7 @@ async function getWeatherForCoordinates(
 function addAcisSummaries(
   records: ClimateRecords,
   summaries: unknown,
-  kind: keyof ClimateRecord,
+  kind: "high" | "low",
 ) {
   if (!Array.isArray(summaries)) return;
 
@@ -1795,8 +1808,33 @@ function addAcisSummaries(
     if (!Number.isFinite(temperatureF) || !dateMatch) return;
 
     const monthDay = `${dateMatch[1]}-${dateMatch[2]}`;
-    const record = records[monthDay] ?? { high: null, low: null };
+    const record = records[monthDay] ?? {
+      average: null,
+      high: null,
+      low: null,
+    };
     record[kind] = { date, temperatureF };
+    records[monthDay] = record;
+  });
+}
+
+function addAcisAverages(records: ClimateRecords, summaries: unknown) {
+  if (!Array.isArray(summaries)) return;
+
+  summaries.slice(0, 366).forEach((summary, index) => {
+    const temperatureF = Number(summary);
+    if (!Number.isFinite(temperatureF)) return;
+
+    const date = new Date(Date.UTC(2000, 0, index + 1));
+    const monthDay = `${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(
+      date.getUTCDate(),
+    ).padStart(2, "0")}`;
+    const record = records[monthDay] ?? {
+      average: null,
+      high: null,
+      low: null,
+    };
+    record.average = { temperatureF };
     records[monthDay] = record;
   });
 }
@@ -1827,6 +1865,14 @@ async function getAcisDailyRecords(
         smry_only: 1,
         groupby: "year",
       },
+      {
+        name: "avgt",
+        interval: "dly",
+        duration: "dly",
+        smry: "mean",
+        smry_only: 1,
+        groupby: "year",
+      },
     ],
   };
   const response = await fetch(ACIS_STATION_DATA_URL, {
@@ -1846,6 +1892,7 @@ async function getAcisDailyRecords(
   const records: ClimateRecords = {};
   addAcisSummaries(records, data.smry?.[0], "high");
   addAcisSummaries(records, data.smry?.[1], "low");
+  addAcisAverages(records, data.smry?.[2]);
 
   return {
     records,
@@ -1982,6 +2029,7 @@ function cloneClimateRecords(records: ClimateRecords) {
     Object.entries(records).map(([monthDay, record]) => [
       monthDay,
       {
+        average: record.average ? { ...record.average } : null,
         high: record.high ? { ...record.high } : null,
         low: record.low ? { ...record.low } : null,
       },
@@ -2002,6 +2050,9 @@ function estimatedRecordsWithCoverage(
     if (!record) return;
 
     result[monthDay] = {
+      average: record.average
+        ? { ...record.average, coverage, estimated: true }
+        : null,
       high: record.high
         ? { ...record.high, coverage, estimated: true }
         : null,
@@ -2103,7 +2154,11 @@ async function getOpenMeteoDailyRecords(
 
           const high = daily.temperature_2m_max[index];
           const low = daily.temperature_2m_min[index];
-          const record = records[monthDay] ?? { high: null, low: null };
+          const record = records[monthDay] ?? {
+            average: null,
+            high: null,
+            low: null,
+          };
 
           if (
             high !== null &&
@@ -2116,6 +2171,17 @@ async function getOpenMeteoDailyRecords(
             (!record.low || low < record.low.temperatureF)
           ) {
             record.low = { date, temperatureF: low };
+          }
+          if (high !== null && low !== null) {
+            const dailyAverage = (high + low) / 2;
+            const sampleCount = record.average?.sampleCount ?? 0;
+            const previousTotal =
+              (record.average?.temperatureF ?? 0) * sampleCount;
+            record.average = {
+              sampleCount: sampleCount + 1,
+              temperatureF:
+                (previousTotal + dailyAverage) / (sampleCount + 1),
+            };
           }
 
           records[monthDay] = record;
@@ -2224,6 +2290,7 @@ function formatForecastDay(date: Date, timeZone: string) {
 function formatRecordTitle(
   kind: "high" | "low",
   record: ClimateRecordValue | null,
+  metric: boolean,
 ) {
   if (!record) return undefined;
 
@@ -2235,8 +2302,20 @@ function formatRecordTitle(
   }).format(new Date(`${record.date}T00:00:00Z`));
 
   return record.estimated
-    ? `Estimated record ${kind}: ${Math.round(record.temperatureF)}°F on ${date} (ERA5-Land, ${record.coverage})`
-    : `Record ${kind}: ${Math.round(record.temperatureF)}°F on ${date}`;
+    ? `Estimated record ${kind}: ${formatTemperature(record.temperatureF, metric)} on ${date} (ERA5-Land, ${record.coverage})`
+    : `Record ${kind}: ${formatTemperature(record.temperatureF, metric)} on ${date}`;
+}
+
+function formatAverageTitle(
+  average: ClimateAverageValue | null,
+  metric: boolean,
+) {
+  if (!average) return undefined;
+
+  const temperature = formatTemperature(average.temperatureF, metric);
+  return average.estimated
+    ? `Estimated historical average: ${temperature} (daily mean, ERA5-Land, ${average.coverage})`
+    : `Historical average: ${temperature} (daily mean, ACIS station period of record)`;
 }
 
 type PrecipitationPeak = {
@@ -2372,6 +2451,9 @@ export default function WeatherClient() {
     null,
   );
   const tooltip = useTooltip();
+  const metricUnits = weather
+    ? usesMetricUnits(weather.locationHint?.countryCode, weather.provider)
+    : false;
 
   const searchPlaces = useCallback(
     async (query: string, signal: AbortSignal) => {
@@ -2686,7 +2768,7 @@ export default function WeatherClient() {
                   observation.textDescription || "Observed conditions",
                 humidity: observation.relativeHumidity.value,
                 isDaytime: hour >= 6 && hour < 20,
-                rain: formatObservedRainfall(precipitation),
+                rain: formatObservedRainfall(precipitation, metricUnits),
                 source: observation.source ?? ("observed" as const),
                 temperatureF:
                   observationTemperatureFahrenheit(observation),
@@ -2704,6 +2786,7 @@ export default function WeatherClient() {
                   rain: formatForecastRainfall(
                     precipitationProbability,
                     period.forecastPrecipitationInches ?? null,
+                    metricUnits,
                   ),
                   source: "forecast" as const,
                   temperatureF: period.temperature,
@@ -2711,7 +2794,7 @@ export default function WeatherClient() {
               })()
             : null,
     }));
-  }, [weather]);
+  }, [metricUnits, weather]);
 
   const todayRainfall = useMemo(
     () =>
@@ -2782,6 +2865,7 @@ export default function WeatherClient() {
           rain: maximumPrecipitationChance(
             hourlyPeriods.length ? hourlyPeriods : periods,
           ),
+          recordAverage: record?.average ?? null,
           recordHigh: record?.high ?? null,
           recordLow: record?.low ?? null,
         };
@@ -3001,7 +3085,10 @@ export default function WeatherClient() {
                 <strong className="current-temperature">
                   {weather.current.temperatureF === null
                     ? "—"
-                    : `${Math.round(weather.current.temperatureF)}°F`}
+                    : formatTemperature(
+                        weather.current.temperatureF,
+                        metricUnits,
+                      )}
                 </strong>
                 <span className="condition-text">
                   {weather.current.description}
@@ -3020,7 +3107,7 @@ export default function WeatherClient() {
                   {todayForecast?.high === null ||
                   todayForecast?.high === undefined
                     ? "—"
-                    : `${Math.round(todayForecast.high)}°F`}
+                    : formatTemperature(todayForecast.high, metricUnits)}
                 </strong>
               </span>
               <span className="current-fact">
@@ -3030,7 +3117,7 @@ export default function WeatherClient() {
                   {todayForecast?.low === null ||
                   todayForecast?.low === undefined
                     ? "—"
-                    : `${Math.round(todayForecast.low)}°F`}
+                    : formatTemperature(todayForecast.low, metricUnits)}
                 </strong>
               </span>
             </div>
@@ -3049,20 +3136,27 @@ export default function WeatherClient() {
                 {todayRainfall !== null && todayRainfall > 0.1 ? (
                   <span className="current-fact">
                     <CloudRain aria-hidden="true" size={14} />
-                    rainfall: <strong>{todayRainfall.toFixed(2)} in.</strong>
+                    rainfall:{" "}
+                    <strong>
+                      {formatRainfallInches(todayRainfall, metricUnits)}
+                    </strong>
                   </span>
                 ) : null}
               </div>
               <span className="current-fact">
                 <Wind aria-hidden="true" size={14} />
                 wind:{" "}
-                <strong>{weather.current.windSpeed}</strong>
+                <strong>
+                  {formatWind(weather.current.windSpeed, metricUnits)}
+                </strong>
               </span>
               {rainfallForecast !== null && rainfallForecast > 0 ? (
                 <span className="current-fact rainfall-forecast">
                   <CloudRain aria-hidden="true" size={14} />
                   rainfall forecast:{" "}
-                  <strong>{formatRainfallInches(rainfallForecast)}</strong>
+                  <strong>
+                    {formatRainfallInches(rainfallForecast, metricUnits)}
+                  </strong>
                 </span>
               ) : null}
             </div>
@@ -3119,7 +3213,10 @@ export default function WeatherClient() {
                     {reading?.temperatureF === null ||
                     reading?.temperatureF === undefined
                       ? "—"
-                      : `${Math.round(reading.temperatureF)}°F`}
+                      : formatTemperature(
+                          reading.temperatureF,
+                          metricUnits,
+                        )}
                   </span>
                   <span>
                     {reading?.humidity === null ||
@@ -3135,15 +3232,16 @@ export default function WeatherClient() {
             <p className="table-note">
               {weather.provider === "noaa" ? (
                 <>
-                  * past = observed 1h rainfall (in.) / future = precipitation
-                  chance. Earlier hours use station{" "}
+                  * past = observed 1h rainfall (
+                  {metricUnits ? "mm" : "in."}) / future = precipitation chance.
+                  Earlier hours use station{" "}
                   {weather.stationId ?? "data"}.
                 </>
               ) : (
                 <>
-                  * past = estimated 1h precipitation (in.) / future =
-                  precipitation chance. Earlier hours use Open-Meteo model
-                  data.
+                  * past = estimated 1h precipitation (
+                  {metricUnits ? "mm" : "in."}) / future = precipitation chance.
+                  Earlier hours use Open-Meteo model data.
                 </>
               )}
             </p>
@@ -3166,6 +3264,7 @@ export default function WeatherClient() {
               <span>low</span>
               <span>rec hi</span>
               <span>rec lo</span>
+              <span>rec avg</span>
               <span>rain</span>
             </div>
 
@@ -3191,35 +3290,75 @@ export default function WeatherClient() {
                   <span>
                     {forecast.high === null
                       ? "—"
-                      : `${Math.round(forecast.high)}°F`}
+                      : formatTemperature(forecast.high, metricUnits)}
                   </span>
                   <span>
                     {forecast.low === null
                       ? "—"
-                      : `${Math.round(forecast.low)}°F`}
+                      : formatTemperature(forecast.low, metricUnits)}
                   </span>
                   <span
-                    aria-label={formatRecordTitle("high", forecast.recordHigh)}
+                    aria-label={formatRecordTitle(
+                      "high",
+                      forecast.recordHigh,
+                      metricUnits,
+                    )}
                     className={forecast.recordHigh ? "hover-tip" : undefined}
                     data-tooltip={formatRecordTitle(
                       "high",
                       forecast.recordHigh,
+                      metricUnits,
                     )}
                     tabIndex={forecast.recordHigh ? 0 : undefined}
                   >
                     {forecast.recordHigh === null
                       ? "—"
-                      : `${Math.round(forecast.recordHigh.temperatureF)}°F`}
+                      : formatTemperature(
+                          forecast.recordHigh.temperatureF,
+                          metricUnits,
+                        )}
                   </span>
                   <span
-                    aria-label={formatRecordTitle("low", forecast.recordLow)}
+                    aria-label={formatRecordTitle(
+                      "low",
+                      forecast.recordLow,
+                      metricUnits,
+                    )}
                     className={forecast.recordLow ? "hover-tip" : undefined}
-                    data-tooltip={formatRecordTitle("low", forecast.recordLow)}
+                    data-tooltip={formatRecordTitle(
+                      "low",
+                      forecast.recordLow,
+                      metricUnits,
+                    )}
                     tabIndex={forecast.recordLow ? 0 : undefined}
                   >
                     {forecast.recordLow === null
                       ? "—"
-                      : `${Math.round(forecast.recordLow.temperatureF)}°F`}
+                      : formatTemperature(
+                          forecast.recordLow.temperatureF,
+                          metricUnits,
+                        )}
+                  </span>
+                  <span
+                    aria-label={formatAverageTitle(
+                      forecast.recordAverage,
+                      metricUnits,
+                    )}
+                    className={
+                      forecast.recordAverage ? "hover-tip" : undefined
+                    }
+                    data-tooltip={formatAverageTitle(
+                      forecast.recordAverage,
+                      metricUnits,
+                    )}
+                    tabIndex={forecast.recordAverage ? 0 : undefined}
+                  >
+                    {forecast.recordAverage === null
+                      ? "—"
+                      : formatTemperature(
+                          forecast.recordAverage.temperatureF,
+                          metricUnits,
+                        )}
                   </span>
                   <span
                     aria-label={formatRainTitle(

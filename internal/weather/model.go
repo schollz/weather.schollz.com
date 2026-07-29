@@ -36,15 +36,16 @@ type HourlyReading struct {
 }
 
 type ClimateValue struct {
-	Date        string  `json:"date"`
+	Date        string  `json:"date,omitempty"`
 	Temperature float64 `json:"temperature_f"`
 	Estimated   bool    `json:"estimated"`
 	Coverage    string  `json:"coverage,omitempty"`
 }
 
 type ClimateRecord struct {
-	High *ClimateValue `json:"high,omitempty"`
-	Low  *ClimateValue `json:"low,omitempty"`
+	High    *ClimateValue `json:"high,omitempty"`
+	Low     *ClimateValue `json:"low,omitempty"`
+	Average *ClimateValue `json:"average,omitempty"`
 }
 
 type DailyForecast struct {

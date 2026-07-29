@@ -99,4 +99,7 @@ test("formats positive hourly amounts without adding zero amounts", () => {
   assert.equal(formatObservedRainfall(0.006), "<0.01 in.");
   assert.equal(formatObservedRainfall(0.34), "0.34 in.");
   assert.equal(formatRainfallInches(0.004), "<0.01 in.");
+  assert.equal(formatForecastRainfall(57, 0.34, true), "57% (8.6 mm)");
+  assert.equal(formatObservedRainfall(0.006, true), "0.2 mm");
+  assert.equal(formatRainfallInches(0.004, true), "0.1 mm");
 });

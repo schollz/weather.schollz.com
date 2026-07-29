@@ -10,9 +10,11 @@ A minimal worldwide weather page powered by
 
 The site uses your browser location or a worldwide place search to show current
 conditions, hourly details, and a seven-day forecast. Supported U.S. areas use
-NOAA forecasts and station observations plus ACIS daily temperature records.
-Everywhere else uses Open-Meteo forecasts and estimated ERA5-Land temperature
-records. Live place search uses OpenStreetMap Photon, with OpenStreetMap
+NOAA forecasts and station observations plus ACIS daily temperature records and
+historical averages. Everywhere else uses Open-Meteo forecasts and estimated
+ERA5-Land temperature records and averages. U.S. locations display Fahrenheit,
+inches, and mph; other locations automatically display Celsius, millimeters,
+and km/h. Live place search uses OpenStreetMap Photon, with OpenStreetMap
 Nominatim used for noncanonical place links and reverse lookup for raw
 coordinates. Locations use readable, shareable URL slugs such as `/seattle/`
 and `/hillsboro-or/`; ambiguous U.S. city names include their state
@@ -20,9 +22,9 @@ abbreviation. Inputs such as `/portland%20oregon/` resolve to the canonical
 `/portland-or/` location. Browser requests go directly to the listed providers;
 terminal requests are fetched and rendered by the Go server.
 
-Open-Meteo past-hour values and international records are model-based estimates,
-not official station observations. The public endpoints used by this personal
-site require noncommercial, moderate-volume use and source attribution.
+Open-Meteo past-hour values and international climate history are model-based
+estimates, not official station observations. The public endpoints used by this
+personal site require noncommercial, moderate-volume use and source attribution.
 
 ## Terminal
 
