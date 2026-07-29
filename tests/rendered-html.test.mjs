@@ -192,6 +192,10 @@ test("keeps worldwide weather requests and geolocation in the client app", async
   assert.match(page, /historicalWindowForYear/);
   assert.match(page, /isValidUtcDate/);
   assert.match(page, /wx-open-meteo-records-v2/);
+  assert.match(
+    page,
+    /Number\(date\.slice\(0, 4\)\) <=\s+\(cachedCoverage\[monthDay\]/,
+  );
   assert.match(page, /wx-reverse-geocode-v1/);
   assert.match(page, /wx-forward-geocode-v1/);
   assert.match(page, /AUTO_REFRESH_INTERVAL_MS = 30 \* 60 \* 1000/);

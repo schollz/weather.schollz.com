@@ -109,7 +109,7 @@ func TestRenderTextUsesMetricUnitsOutsideTheUnitedStates(t *testing.T) {
 	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
 	temperature := 68.0
 	rain := 0.25
-	high, low := 77.0, 50.0
+	high, low, average := 77.0, 50.0, 64.4
 	report := WeatherReport{
 		Location: Location{
 			Name: "Vancouver", Country: "Canada", CountryCode: "CA",
@@ -125,8 +125,9 @@ func TestRenderTextUsesMetricUnitsOutsideTheUnitedStates(t *testing.T) {
 		Daily: []DailyForecast{{
 			Date: now, High: &high, Low: &low, Sky: "Rain",
 			Record: &ClimateRecord{
-				High: &ClimateValue{Date: "2009-07-27", Temperature: 86},
-				Low:  &ClimateValue{Date: "1962-07-27", Temperature: 41},
+				High:    &ClimateValue{Date: "2009-07-27", Temperature: 86},
+				Low:     &ClimateValue{Date: "1962-07-27", Temperature: 41},
+				Average: &ClimateValue{Temperature: average},
 			},
 		}},
 		Provider: "Open-Meteo",
@@ -142,6 +143,7 @@ func TestRenderTextUsesMetricUnitsOutsideTheUnitedStates(t *testing.T) {
 		"10°C",
 		"30°C",
 		"5°C",
+		"18°C",
 	} {
 		if !strings.Contains(rendered, expected) {
 			t.Fatalf("metric forecast is missing %q:\n%s", expected, rendered)

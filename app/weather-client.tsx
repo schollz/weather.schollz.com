@@ -2151,6 +2151,12 @@ async function getOpenMeteoDailyRecords(
         daily.time.forEach((date, index) => {
           const monthDay = date.slice(5);
           if (!targetMonthDays.includes(monthDay)) return;
+          if (
+            Number(date.slice(0, 4)) <=
+            (cachedCoverage[monthDay] ?? OPEN_METEO_RECORD_START_YEAR - 1)
+          ) {
+            return;
+          }
 
           const high = daily.temperature_2m_max[index];
           const low = daily.temperature_2m_min[index];
