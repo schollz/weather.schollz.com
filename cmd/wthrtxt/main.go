@@ -77,6 +77,8 @@ func run(logger *slog.Logger) error {
 		environmentBool("TRUST_PROXY_HEADERS", false),
 		logger,
 	)
+	handler.UmamiURL = environment("UMAMI_URL", "")
+	handler.UmamiWebsiteID = environment("UMAMI_WEBSITE_ID", "")
 
 	httpServer := &http.Server{
 		Addr:              ":" + environment("PORT", "8080"),

@@ -59,8 +59,8 @@ func (f *fakeIPResolver) Resolve(address netip.Addr) (weather.Location, error) {
 func testServer(t *testing.T) (*Server, *fakeReporter, *fakeGeocoder, *fakeIPResolver) {
 	t.Helper()
 	assets := fstest.MapFS{
-		"index.html":             {Data: []byte("<!doctype html><title>wthrtxt.com</title>")},
-		"about/index.html":       {Data: []byte("<!doctype html><title>About wthrtxt.com</title>")},
+		"index.html":             {Data: []byte("<!doctype html><title>wthrtxt.com</title><body></body>")},
+		"about/index.html":       {Data: []byte("<!doctype html><title>About wthrtxt.com</title><body></body>")},
 		"assets/app-abc123.js":   {Data: []byte("console.log('ok')")},
 		"favicon.svg":            {Data: []byte("<svg></svg>")},
 		"og.png":                 {Data: []byte("social preview")},
@@ -156,6 +156,41 @@ func TestNegotiatesBrowserAndTerminalResponses(t *testing.T) {
 	}
 	if value := curlResponse.Header().Get("Vary"); value != "User-Agent, Accept" {
 		t.Fatalf("unexpected Vary header: %q", value)
+	}
+}
+
+func TestUmamiTrackerRequiresBothEnvironmentValues(t *testing.T) {
+	handler, _, _, _ := testServer(t)
+	request := httptest.NewRequest(http.MethodGet, "http://wthrtxt.com/", nil)
+	request.Header.Set("Accept", "text/html")
+
+	for _, testCase := range []struct {
+		name      string
+		url       string
+		websiteID string
+		tracked   bool
+	}{
+		{name: "unset"},
+		{name: "URL only", url: "https://umami.schollz.com"},
+		{name: "website ID only", websiteID: "website-uuid"},
+		{
+			name:      "both values",
+			url:       "https://umami.schollz.com/",
+			websiteID: "website-uuid",
+			tracked:   true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			handler.UmamiURL = testCase.url
+			handler.UmamiWebsiteID = testCase.websiteID
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+
+			script := `<script defer data-website-id="website-uuid" src="https://umami.schollz.com/script.js"></script>`
+			if strings.Contains(response.Body.String(), script) != testCase.tracked {
+				t.Fatalf("unexpected tracker response: %q", response.Body.String())
+			}
+		})
 	}
 }
 

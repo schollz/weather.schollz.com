@@ -83,6 +83,8 @@ Runtime configuration:
 | `DATA_DIR` | `filepath.Join(os.TempDir(), "wthrtxt")` | BoltDB cache directory |
 | `GEOLITE2_DB` | `/opt/wthrtxt/GeoLite2-City.mmdb` | GeoLite2 City database |
 | `TRUST_PROXY_HEADERS` | `false` | Trust Caddy's client-IP headers |
+| `UMAMI_URL` | unset | Umami base URL, such as `https://umami.schollz.com` |
+| `UMAMI_WEBSITE_ID` | unset | Umami website ID, such as `website-uuid` |
 
 ## Acknowledgements 
 

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -49,6 +50,8 @@ type Server struct {
 	Logger            *slog.Logger
 	Now               func() time.Time
 	BrowserCache      *store.Store
+	UmamiURL          string
+	UmamiWebsiteID    string
 	static            http.Handler
 }
 
@@ -126,12 +129,41 @@ func (s *Server) serveBrowser(response http.ResponseWriter, request *http.Reques
 		s.writeTextError(response, request, http.StatusServiceUnavailable, "browser application has not been built")
 		return
 	}
+	index = injectUmamiTracker(index, s.UmamiURL, s.UmamiWebsiteID)
 	response.Header().Set("Content-Type", "text/html; charset=utf-8")
 	response.Header().Set("Cache-Control", "no-cache")
 	response.WriteHeader(http.StatusOK)
 	if request.Method != http.MethodHead {
 		_, _ = response.Write(index)
 	}
+}
+
+func injectUmamiTracker(index []byte, baseURL, websiteID string) []byte {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	websiteID = strings.TrimSpace(websiteID)
+	if baseURL == "" || websiteID == "" {
+		return index
+	}
+
+	parsedURL, err := url.Parse(baseURL)
+	if err != nil || parsedURL.Scheme != "https" || parsedURL.Host == "" {
+		return index
+	}
+	scriptURL, err := url.JoinPath(baseURL, "script.js")
+	if err != nil {
+		return index
+	}
+
+	const closingBody = "</body>"
+	if !strings.Contains(string(index), closingBody) {
+		return index
+	}
+	script := `<script defer data-website-id="` +
+		html.EscapeString(websiteID) +
+		`" src="` +
+		html.EscapeString(scriptURL) +
+		`"></script>`
+	return []byte(strings.Replace(string(index), closingBody, script+closingBody, 1))
 }
 
 type browserWeatherCacheRequest struct {
