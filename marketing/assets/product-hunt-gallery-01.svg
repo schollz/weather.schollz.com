@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1270" height="760" viewBox="0 0 1270 760">
+  <defs>
+    <pattern id="dots" width="18" height="18" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.5" fill="#b8b7af"/>
+    </pattern>
+  </defs>
+  <rect width="1270" height="760" fill="#f3f2ec"/>
+  <rect x="26" y="26" width="1218" height="708" rx="14" fill="none" stroke="#151513" stroke-width="4"/>
+  <rect x="55" y="55" width="1160" height="72" fill="url(#dots)" opacity=".8"/>
+  <text x="58" y="106" fill="#1479a7" font-family="Menlo" font-size="33" font-weight="700">&gt;_</text>
+  <text x="60" y="237" fill="#151513" font-family="Menlo" font-size="95" font-weight="700" letter-spacing="-5">wthrtxt.com</text>
+  <line x1="60" y1="276" x2="1210" y2="276" stroke="#151513" stroke-width="3"/>
+  <text x="60" y="330" fill="#151513" font-family="Menlo" font-size="35" font-weight="700" letter-spacing="3">LOCAL WEATHER, PLAIN TEXT</text>
+  <line x1="60" y1="359" x2="1210" y2="359" stroke="#9b9a92" stroke-width="2"/>
+
+  <g transform="translate(86 410) scale(5.8)" fill="none" stroke="#1479a7" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.35">
+    <path d="M12 2v2"/>
+    <path d="m4.93 4.93 1.41 1.41"/>
+    <path d="M20 12h2"/>
+    <path d="m19.07 4.93-1.41 1.41"/>
+    <path d="M15.947 12.65a4 4 0 0 0-5.925-4.128"/>
+    <path d="M13 22H7a5 5 0 1 1 4.9-6H13a3 3 0 0 1 0 6Z" stroke="#151513"/>
+  </g>
+  <text x="285" y="494" fill="#151513" font-family="Menlo" font-size="72" font-weight="700">21°C</text>
+  <text x="287" y="540" fill="#151513" font-family="Menlo" font-size="23" font-weight="700" letter-spacing="2">PARTLY CLOUDY</text>
+  <line x1="526" y1="390" x2="526" y2="574" stroke="#9b9a92" stroke-width="2"/>
+
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <g transform="translate(579 424)" stroke="#1479a7" stroke-width="5">
+      <circle cx="26" cy="26" r="13"/>
+      <path d="M26 3v8M26 41v8M3 26h8M41 26h8M10 10l6 6M42 10l-6 6"/>
+    </g>
+    <g transform="translate(712 424)" stroke="#151513" stroke-width="5">
+      <path d="M9 40h37a15 15 0 0 0-3-29 20 20 0 0 0-37 9A11 11 0 0 0 9 40Z"/>
+    </g>
+    <g transform="translate(853 424)" stroke="#1479a7" stroke-width="5">
+      <circle cx="26" cy="26" r="16"/>
+      <path d="M26 0v9M26 43v9M0 26h9M43 26h9M7 7l7 7M45 7l-7 7M7 45l7-7M45 45l-7-7"/>
+    </g>
+    <g transform="translate(1001 422)" stroke="#151513" stroke-width="5">
+      <path d="M43 42A24 24 0 0 1 20 7a24 24 0 1 0 23 35Z"/>
+    </g>
+    <g transform="translate(1125 424)" stroke="#151513" stroke-width="5">
+      <path d="M9 40h37a15 15 0 0 0-3-29 20 20 0 0 0-37 9A11 11 0 0 0 9 40Z"/>
+    </g>
+  </g>
+  <g fill="#686862" font-family="Menlo" font-size="17" text-anchor="middle">
+    <text x="605" y="408">12:00</text>
+    <text x="747" y="408">15:00</text>
+    <text x="879" y="408">18:00</text>
+    <text x="1027" y="408">21:00</text>
+    <text x="1160" y="408">00:00</text>
+  </g>
+  <g fill="#151513" font-family="Menlo" font-size="20" font-weight="700" text-anchor="middle">
+    <text x="605" y="523">21°C</text>
+    <text x="747" y="523">22°C</text>
+    <text x="879" y="523">20°C</text>
+    <text x="1027" y="523">17°C</text>
+    <text x="1160" y="523">15°C</text>
+  </g>
+
+  <line x1="60" y1="604" x2="1210" y2="604" stroke="#9b9a92" stroke-width="2" stroke-dasharray="2 9"/>
+  <text x="60" y="674" fill="#151513" font-family="Menlo" font-size="31" font-weight="700" letter-spacing="2">CURRENT</text>
+  <circle cx="278" cy="664" r="5" fill="#1479a7"/>
+  <text x="322" y="674" fill="#151513" font-family="Menlo" font-size="31" font-weight="700" letter-spacing="2">HOURLY</text>
+  <circle cx="512" cy="664" r="5" fill="#1479a7"/>
+  <text x="555" y="674" fill="#151513" font-family="Menlo" font-size="31" font-weight="700" letter-spacing="2">7-DAY</text>
+</svg>
