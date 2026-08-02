@@ -6,6 +6,7 @@ import {
   formatObservedRainfall,
   formatRainfallInches,
   normalizeNoaaPrecipitation,
+  recentRainfallTotal,
   remainingRainfallTotal,
 } from "../app/precipitation.mjs";
 
@@ -86,6 +87,33 @@ test("totals only future forecast hours remaining in the local day", () => {
       new Date("2026-07-26T14:30:00-04:00"),
     ),
     0.5,
+  );
+});
+
+test("totals observed rainfall only within the last six hours", () => {
+  const readings = [
+    { amountInches: 0.5, timestamp: "2026-07-26T06:29:59Z" },
+    { amountInches: 0.01, timestamp: "2026-07-26T06:30:01Z" },
+    { amountInches: 0, timestamp: "2026-07-26T08:00:00Z" },
+    { amountInches: 0.04, timestamp: "2026-07-26T12:00:00Z" },
+    { amountInches: 1, timestamp: "2026-07-26T12:30:01Z" },
+  ];
+
+  assert.equal(
+    recentRainfallTotal(
+      readings,
+      6,
+      new Date("2026-07-26T12:30:00Z"),
+    ),
+    0.05,
+  );
+  assert.equal(
+    recentRainfallTotal(
+      [{ amountInches: null, timestamp: "2026-07-26T12:00:00Z" }],
+      6,
+      new Date("2026-07-26T12:30:00Z"),
+    ),
+    null,
   );
 });
 

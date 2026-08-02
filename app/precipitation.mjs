@@ -21,6 +21,13 @@
  * }} NoaaQuantitativePrecipitation
  */
 
+/**
+ * @typedef {{
+ *   amountInches: number | null;
+ *   timestamp: string;
+ * }} ObservedPrecipitationReading
+ */
+
 function durationMilliseconds(duration) {
   const match =
     /^P(?:(\d+(?:\.\d+)?)D)?(?:T(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?)?$/.exec(
@@ -171,6 +178,45 @@ export function remainingRainfallTotal(
       localDateKey(start, timeZone) !== today ||
       amount === null ||
       amount === undefined ||
+      !Number.isFinite(amount)
+    ) {
+      return;
+    }
+
+    foundValue = true;
+    total += Math.max(0, amount);
+  });
+
+  return foundValue ? total : null;
+}
+
+/**
+ * Sum observed precipitation within a rolling number of hours.
+ *
+ * @param {ObservedPrecipitationReading[]} readings
+ * @param {number} [hours]
+ * @param {Date} [now]
+ * @returns {number | null}
+ */
+export function recentRainfallTotal(
+  readings,
+  hours = 6,
+  now = new Date(),
+) {
+  const endTime = now.getTime();
+  const startTime = endTime - hours * 60 * 60 * 1000;
+  let foundValue = false;
+  let total = 0;
+
+  readings.forEach((reading) => {
+    const timestamp = new Date(reading.timestamp).getTime();
+    const amount = reading.amountInches;
+
+    if (
+      !Number.isFinite(timestamp) ||
+      timestamp <= startTime ||
+      timestamp > endTime ||
+      amount === null ||
       !Number.isFinite(amount)
     ) {
       return;

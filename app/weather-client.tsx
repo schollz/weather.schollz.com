@@ -39,6 +39,7 @@ import {
   formatObservedRainfall,
   formatRainfallInches,
   normalizeNoaaPrecipitation,
+  recentRainfallTotal,
   remainingRainfallTotal,
 } from "./precipitation.mjs";
 import { SITE_NAME, SITE_URL } from "./site";
@@ -587,17 +588,24 @@ function isPreferredObservation(
   );
 }
 
-function cumulativeObservedRainfall(
+function recentObservedRainfall(
   observations: StationObservation[],
-  timeZone: string,
   now = new Date(),
 ) {
-  const today = localDateKey(now, timeZone);
+  const endTime = now.getTime();
+  const startTime = endTime - 6 * 60 * 60 * 1000;
   const observationsByHour = new Map<string, StationObservation>();
 
   observations.forEach((observation) => {
     const timestamp = new Date(observation.timestamp);
-    if (localDateKey(timestamp, timeZone) !== today) return;
+    const timestampValue = timestamp.getTime();
+    if (
+      !Number.isFinite(timestampValue) ||
+      timestampValue <= startTime ||
+      timestampValue > endTime
+    ) {
+      return;
+    }
 
     // UTC hour keys preserve both occurrences of a repeated DST hour while
     // still collapsing multiple station reports within the same hour.
@@ -609,19 +617,14 @@ function cumulativeObservedRainfall(
     }
   });
 
-  let foundRainfallValue = false;
-  let total = 0;
-
-  observationsByHour.forEach((observation) => {
-    const rainfall = observationPrecipitationInches(observation);
-
-    if (rainfall !== null) {
-      foundRainfallValue = true;
-      total += rainfall;
-    }
-  });
-
-  return foundRainfallValue ? total : null;
+  return recentRainfallTotal(
+    Array.from(observationsByHour.values(), (observation) => ({
+      amountInches: observationPrecipitationInches(observation),
+      timestamp: observation.timestamp,
+    })),
+    6,
+    now,
+  );
 }
 
 async function getStationObservations(
@@ -2803,13 +2806,10 @@ export default function WeatherClient() {
     }));
   }, [metricUnits, weather]);
 
-  const todayRainfall = useMemo(
+  const recentRainfall = useMemo(
     () =>
       weather
-        ? cumulativeObservedRainfall(
-            weather.observations,
-            weather.timeZone,
-          )
+        ? recentObservedRainfall(weather.observations)
         : null,
     [weather],
   );
@@ -3140,12 +3140,12 @@ export default function WeatherClient() {
                       : `${Math.round(weather.current.humidity)}%`}
                   </strong>
                 </span>
-                {todayRainfall !== null && todayRainfall > 0.1 ? (
+                {recentRainfall !== null && recentRainfall > 0 ? (
                   <span className="current-fact">
                     <CloudRain aria-hidden="true" size={14} />
-                    rainfall:{" "}
+                    rainfall (6h):{" "}
                     <strong>
-                      {formatRainfallInches(todayRainfall, metricUnits)}
+                      {formatRainfallInches(recentRainfall, metricUnits)}
                     </strong>
                   </span>
                 ) : null}

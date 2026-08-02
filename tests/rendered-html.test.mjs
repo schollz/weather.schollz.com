@@ -249,9 +249,9 @@ test("keeps worldwide weather requests and geolocation in the client app", async
     page,
     /hourlyPeriods\.length \? hourlyPeriods : periods/,
   );
-  assert.match(page, /cumulativeObservedRainfall/);
-  assert.match(page, /todayRainfall !== null && todayRainfall > 0\.1/);
-  assert.match(page, /rainfall:\{" "\}\s*<strong>/);
+  assert.match(page, /recentObservedRainfall/);
+  assert.match(page, /recentRainfall !== null && recentRainfall > 0/);
+  assert.match(page, /rainfall \(6h\):\{" "\}\s*<strong>/);
   assert.match(page, /Highest rain chance:/);
   assert.match(
     page,
